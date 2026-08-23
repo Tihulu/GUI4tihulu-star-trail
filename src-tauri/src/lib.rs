@@ -492,12 +492,14 @@ fn stop_job(state: State<'_, ProcessState>) -> Result<(), String> {
         .clone()
         .ok_or_else(|| "No tihulu job is running".to_string())?;
 
-    active
+    let result = active
         .child
         .lock()
         .map_err(|_| "Running process is unavailable")?
         .kill()
-        .map_err(|error| format!("Could not stop tihulu: {error}"))
+        .map_err(|error| format!("Could not stop tihulu: {error}"));
+
+    result
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
