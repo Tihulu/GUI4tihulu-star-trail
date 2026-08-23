@@ -55,10 +55,6 @@ jobs:
             librsvg2-dev \
             patchelf
 
-      - name: Install macOS Rust targets
-        if: matrix.platform == 'macos-latest'
-        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
-
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
@@ -66,6 +62,10 @@ jobs:
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Install macOS Rust targets
+        if: matrix.platform == 'macos-latest'
+        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
 
       - name: Install frontend dependencies
         run: npm install
