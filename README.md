@@ -20,9 +20,9 @@ curl -fsSL https://raw.githubusercontent.com/Tihulu/GUI4tihulu-star-trail/main/s
 irm https://raw.githubusercontent.com/Tihulu/GUI4tihulu-star-trail/main/scripts/install.ps1 | iex
 ```
 
-On Debian, Ubuntu and Pop!_OS the Unix installer reuses the main project's managed installer. On macOS it reuses the main project's macOS installer. Other Linux distributions fall back to an isolated Python virtual environment. Windows installs the engine into an isolated per-user virtual environment when `tihulu` is missing; if Python is also missing, the script installs Python 3.12 with `winget` first.
+On Debian, Ubuntu and Pop!_OS the Unix installer reuses the main project's managed installer. On macOS it reuses the main project's macOS installer. Other supported Linux distributions fall back to an isolated Python virtual environment. Windows installs the engine into an isolated per-user virtual environment when `tihulu` is missing; if Python is also missing, the script installs Python 3.12 with `winget` first.
 
-> The one-line installer downloads the GUI from the latest tagged GitHub Release. The first release therefore becomes installable immediately after a `v*` tag successfully finishes the release workflow.
+> The one-line installer downloads the GUI from the latest GitHub Release. Merging a new version into `main` builds all supported desktop packages and publishes that version automatically.
 
 ## Supported platforms
 
@@ -31,7 +31,8 @@ On Debian, Ubuntu and Pop!_OS the Unix installer reuses the main project's manag
 | Windows 10/11 x86_64 | NSIS `.exe` | Existing `tihulu`, or managed Python 3.12 venv |
 | macOS 11+ Intel + Apple Silicon | Universal `.dmg` | Existing `tihulu`, or main macOS installer |
 | Linux x86_64 | `.AppImage` | Existing `tihulu`, Debian installer, or venv fallback |
-| Linux ARM64 | `.AppImage` | Existing `tihulu`, Debian installer, or venv fallback |
+
+Linux ARM64 GUI packages are intentionally not published yet. The GUI itself builds on ARM64, but the upstream `tihulu-star-trail` engine does not currently have Linux ARM64 CI/release coverage, so the project does not claim end-to-end ARM64 support yet.
 
 ## Features
 
@@ -107,12 +108,9 @@ npm run tauri build
 
 ## Releases
 
-`.github/workflows/build.yml` builds Linux x86_64, Linux ARM64, macOS Universal and Windows x86_64 packages. A version tag publishes release assets automatically:
+`.github/workflows/build.yml` validates and packages Linux x86_64, macOS Universal and Windows x86_64. On a successful push to `main`, the workflow reads the version from `package.json`, creates the corresponding `v*` Git tag and GitHub Release, uploads the three native packages, and adds `SHA256SUMS.txt`.
 
-```bash
-git tag v0.1.0
-git push origin v0.1.0
-```
+For example, `package.json` version `0.1.0` publishes release `v0.1.0`. Bump the package version before the next release.
 
 The one-line installers always resolve the newest published release through the GitHub Releases API.
 
