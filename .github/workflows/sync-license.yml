@@ -1,0 +1,30 @@
+name: Sync canonical AGPL license
+
+on:
+  push:
+    branches:
+      - feature/cross-platform-gui
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/cross-platform-gui
+      - name: Copy canonical AGPL v3 text
+        run: curl -fsSL https://raw.githubusercontent.com/Tihulu/tihulu-star-trail/main/LICENSE -o LICENSE
+      - name: Commit exact license text
+        run: |
+          if git diff --quiet -- LICENSE; then
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add LICENSE
+          git commit -m "Sync canonical AGPL license [skip ci]"
+          git push origin HEAD:feature/cross-platform-gui
