@@ -1,0 +1,47 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Tihulu Star Trail Studio",
+  "version": "0.1.0",
+  "identifier": "io.github.tihulu.gui4startrail",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Tihulu Star Trail Studio",
+        "width": 1180,
+        "height": 850,
+        "minWidth": 760,
+        "minHeight": 650,
+        "resizable": true,
+        "fullscreen": false,
+        "center": true,
+        "backgroundColor": "#070912"
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "category": "Photography",
+    "shortDescription": "Modern desktop GUI for tihulu-star-trail",
+    "longDescription": "Group night-sky photos by camera angle and render star trails or timelapses using an installed tihulu-star-trail engine.",
+    "copyright": "Copyright © Tihulu contributors",
+    "macOS": {
+      "minimumSystemVersion": "11.0"
+    },
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "displayLanguageSelector": false
+      }
+    }
+  }
+}
