@@ -4,11 +4,14 @@ on:
   push:
     branches:
       - main
-      - "feature/**"
     tags:
       - "v*"
   pull_request:
   workflow_dispatch:
+
+concurrency:
+  group: desktop-build-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: write
