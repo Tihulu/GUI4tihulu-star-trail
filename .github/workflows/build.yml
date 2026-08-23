@@ -70,6 +70,9 @@ jobs:
       - name: Install frontend dependencies
         run: npm install
 
+      - name: Generate native icon set
+        run: npx tauri icon app-icon.svg
+
       - name: Type-check frontend
         run: npm run check
 
