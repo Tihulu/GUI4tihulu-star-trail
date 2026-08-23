@@ -12,6 +12,18 @@ fail() { printf '\nError: %s\n' "$1" >&2; exit 1; }
 
 command -v curl >/dev/null 2>&1 || fail "curl is required."
 
+case "$OS" in
+  Darwin)
+    ;;
+  Linux)
+    case "$ARCH" in
+      x86_64|amd64) ;;
+      *) fail "Linux GUI releases currently support x86_64 only. Linux ARM64 will be enabled after tihulu-star-trail has ARM64 CI/release coverage." ;;
+    esac
+    ;;
+  *) fail "This installer supports macOS and Linux. Use scripts/install.ps1 on Windows." ;;
+esac
+
 find_tihulu() {
   if command -v tihulu >/dev/null 2>&1; then
     command -v tihulu
@@ -56,7 +68,6 @@ if ! ENGINE_PATH="$(find_tihulu 2>/dev/null)"; then
         install_engine_fallback
       fi
       ;;
-    *) fail "This installer supports macOS and Linux. Use scripts/install.ps1 on Windows." ;;
   esac
   ENGINE_PATH="$(find_tihulu 2>/dev/null || true)"
   [ -n "$ENGINE_PATH" ] || fail "tihulu-star-trail installation finished but the tihulu launcher was not found."
@@ -72,11 +83,10 @@ if [ -z "$PYTHON" ] && command -v python >/dev/null 2>&1; then PYTHON="$(command
 [ -n "$PYTHON" ] || fail "Python is required to resolve the latest GitHub release."
 
 say "Downloading the latest Tihulu Star Trail Studio"
-ASSET_URL="$(GUI_REPO="$GUI_REPO" GUI_OS="$OS" GUI_ARCH="$ARCH" "$PYTHON" - <<'PY'
+ASSET_URL="$(GUI_REPO="$GUI_REPO" GUI_OS="$OS" "$PYTHON" - <<'PY'
 import json, os, urllib.request
 repo = os.environ["GUI_REPO"]
 os_name = os.environ["GUI_OS"]
-arch = os.environ["GUI_ARCH"].lower()
 request = urllib.request.Request(
     f"https://api.github.com/repos/{repo}/releases/latest",
     headers={"Accept": "application/vnd.github+json", "User-Agent": "GUI4tihulu-star-trail-installer"},
@@ -91,16 +101,14 @@ if os_name == "Darwin":
     candidates = [a for a in assets if a.get("name", "").lower().endswith(".dmg")]
 else:
     candidates = [a for a in assets if a.get("name", "").lower().endswith(".appimage")]
-    if len(candidates) > 1:
-        arm = arch in {"arm64", "aarch64"}
-        preferred = [
-            a for a in candidates
-            if any(token in a.get("name", "").lower() for token in (("aarch64", "arm64") if arm else ("x86_64", "amd64", "x64")))
-        ]
-        if preferred:
-            candidates = preferred
+    preferred = [
+        a for a in candidates
+        if any(token in a.get("name", "").lower() for token in ("x86_64", "amd64", "x64"))
+    ]
+    if preferred:
+        candidates = preferred
 if not candidates:
-    raise SystemExit("No compatible GUI release asset was found. Publish a tagged release first.")
+    raise SystemExit("No compatible GUI release asset was found. Publish a release first.")
 print(candidates[0]["browser_download_url"])
 PY
 )" || fail "Could not resolve a compatible GUI release."
