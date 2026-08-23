@@ -32,10 +32,13 @@ function Find-Python312 {
     $preferred = Join-Path $env:LOCALAPPDATA "Programs\Python\Python312\python.exe"
     if (Test-Path $preferred) { return @{ Exe = $preferred; Prefix = @() } }
 
-    $candidate = Get-ChildItem (Join-Path $env:LOCALAPPDATA "Programs\Python") -Filter python.exe -Recurse -ErrorAction SilentlyContinue |
-        Sort-Object FullName -Descending |
-        Select-Object -First 1
-    if ($candidate) { return @{ Exe = $candidate.FullName; Prefix = @() } }
+    $pythonRoot = Join-Path $env:LOCALAPPDATA "Programs\Python"
+    if (Test-Path $pythonRoot) {
+        $candidate = Get-ChildItem $pythonRoot -Filter python.exe -Recurse -ErrorAction SilentlyContinue |
+            Sort-Object FullName -Descending |
+            Select-Object -First 1
+        if ($candidate) { return @{ Exe = $candidate.FullName; Prefix = @() } }
+    }
     return $null
 }
 
@@ -55,10 +58,12 @@ if (-not $Tihulu) {
     }
 
     New-Item -ItemType Directory -Force -Path $EngineRoot | Out-Null
-    & $Python.Exe @($Python.Prefix) -m venv (Join-Path $EngineRoot ".venv")
+    $VenvPath = Join-Path $EngineRoot ".venv"
+    $VenvArgs = @($Python.Prefix) + @("-m", "venv", $VenvPath)
+    & $Python.Exe @VenvArgs
     if ($LASTEXITCODE -ne 0) { throw "Could not create the tihulu-star-trail virtual environment." }
 
-    $VenvPython = Join-Path $EngineRoot ".venv\Scripts\python.exe"
+    $VenvPython = Join-Path $VenvPath "Scripts\python.exe"
     & $VenvPython -m pip install --upgrade pip
     if ($LASTEXITCODE -ne 0) { throw "Could not update pip." }
     & $VenvPython -m pip install "tihulu-star-trail[video] @ https://github.com/Tihulu/tihulu-star-trail/archive/refs/heads/main.zip"
