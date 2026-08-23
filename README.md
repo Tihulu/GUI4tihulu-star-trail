@@ -1,43 +1,79 @@
 # GUI4tihulu-star-trail
 
-A modern, cross-platform desktop GUI for [`tihulu-star-trail`](https://github.com/Tihulu/tihulu-star-trail).
+A modern, cross-platform desktop GUI for [`tihulu-star-trail`](https://github.com/Tihulu/tihulu-star-trail), built with **Tauri 2 + TypeScript/Vite**.
 
-The GUI intentionally **does not duplicate the image-processing engine**. It discovers and runs the `tihulu` CLI already installed on the computer, so the desktop interface stays small and the processing behavior remains identical to the main project.
+The GUI does not duplicate the astrophotography engine. It discovers and runs the real `tihulu` CLI, so grouping, star-trail rendering and timelapse behavior remain in the main project.
 
-## Platforms
+## One-line install
 
-- Windows 10/11
-- macOS (Apple Silicon and Intel via universal build)
-- Linux (WebKitGTK desktop environments)
+The installer checks for `tihulu-star-trail` first. **If the engine is missing, it installs it automatically**, then installs the latest GUI release.
 
-Built with **Tauri 2 + TypeScript/Vite**.
+### Linux / macOS
 
-## What it can do
-
-- Detect the installed `tihulu` executable automatically from `PATH`
-- Allow a custom `tihulu` executable path when needed
-- Full run: group images and render star trails
-- Group-only workflow
-- Star-trail rendering from a folder or grouped output
-- Timelapse rendering
-- Native folder pickers
-- Advanced controls matching the CLI (threshold, ORB features, EXIF time window, link mode, JPEG quality, FPS, codec, etc.)
-- Stream CLI output into a live console
-- Stop a running job
-- Open the output directory from the GUI
-- Keep all processing local on the user's machine
-
-## Requirement: install tihulu-star-trail first
-
-The GUI expects the main project to already be installed and the `tihulu` command to be available.
-
-Verify it in a terminal:
-
-```bash
-tihulu --help
+```sh
+curl -fsSL https://raw.githubusercontent.com/Tihulu/GUI4tihulu-star-trail/main/scripts/install.sh | sh
 ```
 
-If the GUI cannot find it on `PATH`, open **Advanced controls** and set the full path to the `tihulu` executable.
+### Windows PowerShell
+
+```powershell
+irm https://raw.githubusercontent.com/Tihulu/GUI4tihulu-star-trail/main/scripts/install.ps1 | iex
+```
+
+On Debian, Ubuntu and Pop!_OS the Unix installer reuses the main project's managed installer. On macOS it reuses the main project's macOS installer. Other Linux distributions fall back to an isolated Python virtual environment. Windows installs the engine into an isolated per-user virtual environment when `tihulu` is missing; if Python is also missing, the script installs Python 3.12 with `winget` first.
+
+> The one-line installer downloads the GUI from the latest tagged GitHub Release. The first release therefore becomes installable immediately after a `v*` tag successfully finishes the release workflow.
+
+## Supported platforms
+
+| Platform | GUI package | Engine handling |
+| --- | --- | --- |
+| Windows 10/11 x86_64 | NSIS `.exe` | Existing `tihulu`, or managed Python 3.12 venv |
+| macOS 11+ Intel + Apple Silicon | Universal `.dmg` | Existing `tihulu`, or main macOS installer |
+| Linux x86_64 | `.AppImage` | Existing `tihulu`, Debian installer, or venv fallback |
+| Linux ARM64 | `.AppImage` | Existing `tihulu`, Debian installer, or venv fallback |
+
+## Features
+
+- Automatic `tihulu` detection from `PATH` and standard install locations
+- Custom executable override when needed
+- **Full run**: group photos and render one star trail per detected camera angle
+- **Group**: organize matching camera angles without rendering
+- **Trail**: render a single folder or existing grouped output
+- **Timelapse**: render MP4 video from a folder or grouped output
+- Native folder/file pickers
+- Live stdout/stderr activity console
+- Stop a running job
+- Open the output directory directly
+- Advanced controls matching the CLI:
+  - grouping threshold
+  - minimum geometric matches
+  - ORB feature count and analysis size
+  - EXIF/file-time grouping window
+  - recursive scanning
+  - copy/symlink/hardlink/manifest-only grouped output
+  - minimum frames and JPEG quality
+  - timelapse FPS, max side and codec
+- Local-only processing: photos are not uploaded by the GUI
+
+## How it works
+
+```text
+Tauri desktop window
+       │
+       │ typed invoke calls + events
+       ▼
+Rust process bridge
+       │
+       │ validated argv (no shell command strings)
+       ▼
+installed `tihulu` CLI
+       │
+       ▼
+tihulu-star-trail processing engine
+```
+
+Paths are passed as individual process arguments, so paths containing spaces work on Windows, macOS and Linux. The bridge only constructs supported `tihulu` commands and options.
 
 ## Development
 
@@ -46,60 +82,42 @@ Prerequisites:
 - Node.js 22+
 - Rust stable
 - Tauri 2 platform prerequisites for your OS
-- `tihulu-star-trail` installed for end-to-end runs
-
-Install dependencies and launch:
+- `tihulu-star-trail` for end-to-end processing tests
 
 ```bash
+git clone https://github.com/Tihulu/GUI4tihulu-star-trail.git
+cd GUI4tihulu-star-trail
 npm install
 npm run tauri dev
 ```
 
-Frontend-only development:
+Frontend only:
 
 ```bash
 npm run dev
 ```
 
-## Build
+Build the native package for the current OS:
 
 ```bash
 npm install
+npx tauri icon app-icon.svg
 npm run tauri build
 ```
 
-Tauri creates the native installer/bundle for the current operating system.
-
 ## Releases
 
-`.github/workflows/build.yml` builds on Windows, Linux, and macOS. Pushing a tag such as:
+`.github/workflows/build.yml` builds Linux x86_64, Linux ARM64, macOS Universal and Windows x86_64 packages. A version tag publishes release assets automatically:
 
 ```bash
 git tag v0.1.0
 git push origin v0.1.0
 ```
 
-creates draft release artifacts through `tauri-apps/tauri-action`.
-
-## Architecture
-
-```text
-TypeScript/Vite UI
-       │
-       │ Tauri invoke + events
-       ▼
-Rust desktop bridge
-       │
-       │ discovers/spawns executable
-       ▼
-installed `tihulu` CLI
-       │
-       ▼
-tihulu-star-trail processing engine
-```
-
-The Rust bridge constructs only supported CLI arguments; it does not execute user-provided shell strings. Input/output paths are passed as individual process arguments.
+The one-line installers always resolve the newest published release through the GitHub Releases API.
 
 ## License
 
-This GUI repository is intended to be distributed under the MIT License, matching the companion project's licensing direction. Add or adjust the repository license before the first public release if needed.
+**GNU Affero General Public License v3.0 only (`AGPL-3.0-only`).**
+
+See [`LICENSE`](LICENSE). Source files also carry SPDX identifiers where appropriate. The desktop UI exposes a source/license link so the corresponding source remains easy to reach.
