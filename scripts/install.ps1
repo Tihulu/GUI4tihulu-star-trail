@@ -11,10 +11,18 @@ function Write-Step([string]$Message) {
 }
 
 function Find-Tihulu {
+    if (Test-Path $ManagedTihulu) { return $ManagedTihulu }
     $command = Get-Command tihulu -ErrorAction SilentlyContinue
     if ($command) { return $command.Source }
-    if (Test-Path $ManagedTihulu) { return $ManagedTihulu }
     return $null
+}
+
+function Test-HardwarePolicies([string]$Executable) {
+    if (-not $Executable -or -not (Test-Path $Executable)) { return $false }
+    try {
+        $help = (& $Executable run --help 2>&1 | Out-String)
+        return $help.Contains("--group-hardware") -and $help.Contains("--trail-hardware") -and $help.Contains("--timelapse-hardware")
+    } catch { return $false }
 }
 
 function Find-Python312 {
@@ -42,41 +50,54 @@ function Find-Python312 {
     return $null
 }
 
-$Tihulu = Find-Tihulu
-if (-not $Tihulu) {
-    Write-Step "tihulu-star-trail is not installed - installing the engine"
+function Ensure-Python {
     $Python = Find-Python312
-    if (-not $Python) {
-        $winget = Get-Command winget -ErrorAction SilentlyContinue
-        if (-not $winget) {
-            throw "Python 3.9+ was not found and winget is unavailable. Install Python 3.12, then rerun this command."
-        }
-        & $winget.Source install --id Python.Python.3.12 -e --silent --accept-package-agreements --accept-source-agreements
-        if ($LASTEXITCODE -ne 0) { throw "winget could not install Python 3.12." }
-        $Python = Find-Python312
-        if (-not $Python) { throw "Python 3.12 was installed but could not be located in this PowerShell session." }
+    if ($Python) { return $Python }
+    $winget = Get-Command winget -ErrorAction SilentlyContinue
+    if (-not $winget) {
+        throw "Python 3.9+ was not found and winget is unavailable. Install Python 3.12, then rerun this command."
     }
-
-    New-Item -ItemType Directory -Force -Path $EngineRoot | Out-Null
-    $VenvPath = Join-Path $EngineRoot ".venv"
-    $VenvArgs = @($Python.Prefix) + @("-m", "venv", $VenvPath)
-    & $Python.Exe @VenvArgs
-    if ($LASTEXITCODE -ne 0) { throw "Could not create the tihulu-star-trail virtual environment." }
-
-    $VenvPython = Join-Path $VenvPath "Scripts\python.exe"
-    & $VenvPython -m pip install --upgrade pip
-    if ($LASTEXITCODE -ne 0) { throw "Could not update pip." }
-    & $VenvPython -m pip install "tihulu-star-trail[video] @ https://github.com/Tihulu/tihulu-star-trail/archive/refs/heads/main.zip"
-    if ($LASTEXITCODE -ne 0) { throw "Could not install tihulu-star-trail." }
-
-    $Tihulu = Find-Tihulu
-    if (-not $Tihulu) { throw "tihulu-star-trail installed, but its launcher could not be found." }
-} else {
-    Write-Step "Found tihulu-star-trail: $Tihulu"
+    & $winget.Source install --id Python.Python.3.12 -e --silent --accept-package-agreements --accept-source-agreements
+    if ($LASTEXITCODE -ne 0) { throw "winget could not install Python 3.12." }
+    $Python = Find-Python312
+    if (-not $Python) { throw "Python 3.12 was installed but could not be located in this PowerShell session." }
+    return $Python
 }
 
+function Install-CurrentEngine {
+    $Python = Ensure-Python
+    New-Item -ItemType Directory -Force -Path $EngineRoot | Out-Null
+    $VenvPath = Join-Path $EngineRoot ".venv"
+    $VenvPython = Join-Path $VenvPath "Scripts\python.exe"
+    if (-not (Test-Path $VenvPython)) {
+        $VenvArgs = @($Python.Prefix) + @("-m", "venv", $VenvPath)
+        & $Python.Exe @VenvArgs
+        if ($LASTEXITCODE -ne 0) { throw "Could not create the tihulu-star-trail virtual environment." }
+    }
+    & $VenvPython -m pip install --upgrade pip setuptools wheel
+    if ($LASTEXITCODE -ne 0) { throw "Could not update pip." }
+    & $VenvPython -m pip install --upgrade --force-reinstall "tihulu-star-trail[video] @ https://github.com/Tihulu/tihulu-star-trail/archive/refs/heads/main.zip"
+    if ($LASTEXITCODE -ne 0) { throw "Could not install/update tihulu-star-trail." }
+}
+
+$Tihulu = Find-Tihulu
+if (-not $Tihulu) {
+    Write-Step "tihulu-star-trail is not installed - installing the current engine"
+    Install-CurrentEngine
+} elseif (Test-HardwarePolicies $Tihulu) {
+    Write-Step "Found compatible tihulu-star-trail: $Tihulu"
+} else {
+    Write-Step "Installed tihulu engine is older than this GUI - updating it"
+    Install-CurrentEngine
+}
+
+$Tihulu = Find-Tihulu
+if (-not $Tihulu) { throw "tihulu-star-trail installed, but its launcher could not be found." }
 & $Tihulu --help *> $null
 if ($LASTEXITCODE -ne 0) { throw "The tihulu launcher exists but could not be executed." }
+if (-not (Test-HardwarePolicies $Tihulu)) {
+    throw "The engine was updated but still does not expose group/trail/timelapse hardware controls."
+}
 
 Write-Step "Downloading the latest Tihulu Star Trail Studio"
 $Headers = @{ "Accept" = "application/vnd.github+json"; "User-Agent" = "GUI4tihulu-star-trail-installer" }
@@ -97,5 +118,6 @@ if ($Process.ExitCode -ne 0) { throw "GUI installer exited with code $($Process.
 
 Write-Host "`nInstalled Tihulu Star Trail Studio." -ForegroundColor Green
 Write-Host "Engine: $Tihulu"
+Write-Host "Engine hardware controls: Auto / CPU / GPU / GPU+CPU ready"
 Write-Host "License: GNU AGPL v3 (AGPL-3.0-only)"
 Write-Host "Open it from the Windows Start menu."
