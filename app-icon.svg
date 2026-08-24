@@ -1,29 +1,51 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">Tihulu Star Trail Studio</title>
+  <desc id="desc">A polar star surrounded by circular star trails above a mountain horizon.</desc>
   <defs>
-    <radialGradient id="bg" cx="32%" cy="18%" r="90%">
-      <stop offset="0" stop-color="#252044"/>
-      <stop offset="0.52" stop-color="#111525"/>
-      <stop offset="1" stop-color="#070912"/>
+    <radialGradient id="bg" cx="50%" cy="36%" r="78%">
+      <stop offset="0" stop-color="#111b3f"/>
+      <stop offset="0.56" stop-color="#091124"/>
+      <stop offset="1" stop-color="#050815"/>
     </radialGradient>
-    <linearGradient id="orbit" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#b8adff"/>
-      <stop offset="1" stop-color="#72d9e7"/>
+    <linearGradient id="trail" x1="92" y1="90" x2="414" y2="400" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#3fdfff"/>
+      <stop offset="0.48" stop-color="#5d7cff"/>
+      <stop offset="1" stop-color="#a64dff"/>
     </linearGradient>
-    <filter id="glow" x="-100%" y="-100%" width="300%" height="300%">
-      <feGaussianBlur stdDeviation="13" result="b"/>
-      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    <linearGradient id="ridge" x1="138" y1="386" x2="368" y2="282" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#37d8ff"/>
+      <stop offset="1" stop-color="#7667ff"/>
+    </linearGradient>
+    <filter id="starGlow" x="-120%" y="-120%" width="340%" height="340%">
+      <feGaussianBlur stdDeviation="12" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
     </filter>
   </defs>
-  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
-  <circle cx="102" cy="108" r="3" fill="#fff" opacity=".65"/>
-  <circle cx="394" cy="129" r="2" fill="#fff" opacity=".55"/>
-  <circle cx="417" cy="352" r="3" fill="#fff" opacity=".45"/>
-  <circle cx="116" cy="386" r="2" fill="#fff" opacity=".55"/>
-  <g fill="none" stroke="url(#orbit)" stroke-width="14" stroke-linecap="round" opacity=".92">
-    <ellipse cx="256" cy="256" rx="159" ry="74" transform="rotate(29 256 256)"/>
-    <ellipse cx="256" cy="256" rx="159" ry="74" transform="rotate(-29 256 256)" opacity=".72"/>
+
+  <rect x="18" y="18" width="476" height="476" rx="108" fill="url(#bg)"/>
+  <rect x="19.5" y="19.5" width="473" height="473" rx="106.5" fill="none" stroke="#4866b8" stroke-opacity=".68" stroke-width="3"/>
+
+  <g fill="#d8ecff">
+    <circle cx="98" cy="98" r="2.2" opacity=".86"/><circle cx="132" cy="142" r="1.5" opacity=".66"/>
+    <circle cx="180" cy="82" r="1.2" opacity=".8"/><circle cx="234" cy="116" r="1.8" opacity=".75"/>
+    <circle cx="322" cy="88" r="1.4" opacity=".68"/><circle cx="386" cy="126" r="2" opacity=".82"/>
+    <circle cx="420" cy="188" r="1.3" opacity=".62"/><circle cx="84" cy="224" r="1.8" opacity=".8"/>
+    <circle cx="114" cy="306" r="1.3" opacity=".64"/><circle cx="404" cy="304" r="1.7" opacity=".76"/>
+    <circle cx="92" cy="402" r="1.4" opacity=".7"/><circle cx="420" cy="414" r="1.8" opacity=".65"/>
   </g>
-  <circle cx="256" cy="256" r="27" fill="#fff" filter="url(#glow)"/>
-  <circle cx="256" cy="256" r="12" fill="#f8f7ff"/>
-  <path d="M361 150c34 28 52 64 57 102" fill="none" stroke="#9b8cff" stroke-width="8" stroke-linecap="round" opacity=".8"/>
+
+  <g fill="none" stroke="url(#trail)" stroke-linecap="round">
+    <path d="M124 349 A177 177 0 1 1 388 351" stroke-width="9"/>
+    <path d="M151 335 A148 148 0 1 1 361 337" stroke-width="7" opacity=".88"/>
+    <path d="M181 322 A117 117 0 1 1 331 323" stroke-width="5" opacity=".72"/>
+  </g>
+
+  <g filter="url(#starGlow)">
+    <circle cx="256" cy="228" r="9" fill="#ffffff"/>
+    <path d="M256 176 L263 219 L306 228 L263 237 L256 280 L249 237 L206 228 L249 219 Z" fill="#eefbff"/>
+  </g>
+
+  <path d="M77 415 L144 357 L187 385 L251 317 L306 381 L355 342 L435 416 L435 451 L77 451 Z" fill="#050817"/>
+  <path d="M111 386 L144 357 L187 385" fill="none" stroke="url(#ridge)" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" opacity=".9"/>
+  <path d="M219 351 L251 317 L282 353" fill="none" stroke="url(#ridge)" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" opacity=".78"/>
 </svg>
