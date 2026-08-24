@@ -130,7 +130,8 @@ PY
 )" || fail "Could not resolve a compatible GUI release."
 
 TMP_DIR="$(mktemp -d 2>/dev/null || mktemp -d -t tihulu-gui)"
-trap 'rm -rf "$TMP_DIR"' EXIT INT TERM
+APPIMAGE_NEW=""
+trap 'rm -rf "$TMP_DIR"; [ -z "$APPIMAGE_NEW" ] || rm -f "$APPIMAGE_NEW"' EXIT INT TERM
 
 case "$OS" in
   Darwin)
@@ -159,8 +160,16 @@ case "$OS" in
     curl -fsSL "https://raw.githubusercontent.com/$GUI_REPO/main/app-icon.svg" -o "$ICON_PATH"
 
     APPIMAGE="$HOME/.local/bin/tihulu-star-trail-studio"
-    curl -fL "$ASSET_URL" -o "$APPIMAGE"
-    chmod +x "$APPIMAGE"
+    # Never stream into the currently running AppImage. Linux can report
+    # ETXTBSY ("Text file busy") when an executing file is opened for write.
+    # Download beside it, then atomically replace the directory entry instead.
+    APPIMAGE_NEW="$HOME/.local/bin/.tihulu-star-trail-studio.new.$$"
+    rm -f "$APPIMAGE_NEW"
+    curl -fL "$ASSET_URL" -o "$APPIMAGE_NEW"
+    chmod +x "$APPIMAGE_NEW"
+    mv -f "$APPIMAGE_NEW" "$APPIMAGE"
+    APPIMAGE_NEW=""
+
     cat > "$HOME/.local/share/applications/tihulu-star-trail-studio.desktop" <<EOF
 [Desktop Entry]
 Type=Application
