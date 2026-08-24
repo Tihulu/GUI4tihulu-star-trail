@@ -1,6 +1,13 @@
-# GUI4tihulu-star-trail
+<p align="center">
+  <img src="./app-icon.svg" alt="Tihulu Star Trail Studio emblem" width="180" />
+</p>
 
-Modern cross-platform desktop studio for [tihulu-star-trail](https://github.com/Tihulu/tihulu-star-trail), built with Tauri 2 + TypeScript/Vite.
+<h1 align="center">Tihulu Star Trail Studio</h1>
+
+<p align="center">
+  Modern cross-platform desktop studio for <a href="https://github.com/Tihulu/tihulu-star-trail">tihulu-star-trail</a>.<br/>
+  Built with Tauri 2 + TypeScript/Vite · local-first astrophotography workflow.
+</p>
 
 The GUI uses the installed `tihulu` engine as the source of truth instead of duplicating the astrophotography pipeline. Processing stays local.
 
