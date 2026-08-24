@@ -1,0 +1,45 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+
+/* Let the webview skip layout/paint work for cards far outside the viewport. */
+#section-photos .photo-tile {
+  contain: layout paint style;
+  content-visibility: auto;
+  contain-intrinsic-size: 250px 210px;
+}
+
+#section-photos .photo-grid-panel,
+#section-photos .inspector,
+#section-photos .studio-group-panel,
+#section-photos .studio-editor-panel {
+  contain: layout paint style;
+}
+
+/* Large projects automatically trade decorative GPU effects for interaction latency. */
+.workspace-performance-mode #section-photos .glass-card,
+.workspace-performance-mode #section-photos .studio-command-bar,
+.workspace-performance-mode #section-photos .studio-group-panel,
+.workspace-performance-mode #section-photos .studio-editor-panel {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, .18) !important;
+}
+
+.workspace-performance-mode #section-photos .photo-tile,
+.workspace-performance-mode #section-photos .photo-tile *,
+.workspace-performance-mode #section-photos .studio-group-card,
+.workspace-performance-mode #section-photos .studio-editor-panel input[type="range"] {
+  transition: none !important;
+}
+
+.workspace-performance-mode #section-photos .photo-tile {
+  box-shadow: none !important;
+}
+
+.workspace-performance-mode #section-photos .photo-tile:not(.selected):not(.drop-target) {
+  transform: none !important;
+}
+
+.performance-stat {
+  color: #80d9e7;
+  white-space: nowrap;
+}

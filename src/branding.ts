@@ -28,5 +28,5 @@ if (brandMark) {
 
 const footerVersion = document.querySelector<HTMLElement>(".footer > span");
 if (footerVersion) {
-  footerVersion.textContent = "GUI4tihulu-star-trail · AGPL-3.0-only · v0.3.2";
+  footerVersion.textContent = "GUI4tihulu-star-trail · AGPL-3.0-only · v0.3.3";
 }
