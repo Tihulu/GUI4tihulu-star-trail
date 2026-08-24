@@ -6,7 +6,7 @@ use std::{
     net::{TcpListener, TcpStream},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, OnceLock},
     thread,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -33,6 +33,30 @@ struct UiProcess {
 #[derive(Default)]
 struct UiState {
     current: Mutex<Option<UiProcess>>,
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct HardwarePolicies {
+    group_hardware: String,
+    trail_hardware: String,
+    timelapse_hardware: String,
+}
+
+impl Default for HardwarePolicies {
+    fn default() -> Self {
+        Self {
+            group_hardware: "auto".into(),
+            trail_hardware: "auto".into(),
+            timelapse_hardware: "auto".into(),
+        }
+    }
+}
+
+static HARDWARE_POLICIES: OnceLock<Mutex<HardwarePolicies>> = OnceLock::new();
+
+fn hardware_policies() -> &'static Mutex<HardwarePolicies> {
+    HARDWARE_POLICIES.get_or_init(|| Mutex::new(HardwarePolicies::default()))
 }
 
 #[derive(Serialize)]
@@ -115,6 +139,7 @@ const RAW_EXTENSIONS: &[&str] = &[
     "cr2", "cr3", "nef", "arw", "dng", "orf", "rw2", "raf", "pef", "srw", "x3f",
 ];
 const BROWSER_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "webp", "bmp", "gif", "avif"];
+const HARDWARE_MODES: &[&str] = &["auto", "cpu", "gpu", "hybrid"];
 
 fn candidate_names() -> &'static [&'static str] {
     #[cfg(windows)]
@@ -233,6 +258,23 @@ fn detect_engine(custom_executable: Option<String>) -> EngineInfo {
             detail: error,
         },
     }
+}
+
+#[tauri::command]
+fn set_hardware_policies(policies: HardwarePolicies) -> Result<(), String> {
+    for (label, value) in [
+        ("grouping", policies.group_hardware.as_str()),
+        ("trail", policies.trail_hardware.as_str()),
+        ("timelapse", policies.timelapse_hardware.as_str()),
+    ] {
+        if !HARDWARE_MODES.contains(&value) {
+            return Err(format!("Unsupported {label} hardware mode: {value}"));
+        }
+    }
+    *hardware_policies()
+        .lock()
+        .map_err(|_| "Hardware policy state is unavailable")? = policies;
+    Ok(())
 }
 
 fn is_hidden(path: &Path) -> bool {
@@ -458,6 +500,54 @@ fn build_args(request: &JobRequest, input: &Path) -> Vec<String> {
     args
 }
 
+fn engine_supports_hardware_policies(executable: &Path) -> bool {
+    let output = Command::new(executable).args(["run", "--help"]).output();
+    match output {
+        Ok(output) => {
+            let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
+            text.push_str(&String::from_utf8_lossy(&output.stderr));
+            text.contains("--group-hardware")
+                && text.contains("--trail-hardware")
+                && text.contains("--timelapse-hardware")
+        }
+        Err(_) => false,
+    }
+}
+
+fn append_hardware_args(
+    request: &JobRequest,
+    args: &mut Vec<String>,
+    policies: &HardwarePolicies,
+    supported: bool,
+) -> Result<(), String> {
+    let requested = match request.command.as_str() {
+        "run" => vec![
+            ("--group-hardware", policies.group_hardware.as_str()),
+            ("--trail-hardware", policies.trail_hardware.as_str()),
+            ("--timelapse-hardware", policies.timelapse_hardware.as_str()),
+        ],
+        "group" => vec![("--group-hardware", policies.group_hardware.as_str())],
+        "trail" => vec![("--trail-hardware", policies.trail_hardware.as_str())],
+        "timelapse" => vec![("--timelapse-hardware", policies.timelapse_hardware.as_str())],
+        _ => Vec::new(),
+    };
+
+    if !supported {
+        if requested.iter().any(|(_, value)| *value != "auto") {
+            return Err(
+                "The installed tihulu engine is too old for separate CPU/GPU/GPU+CPU controls. Update tihulu-star-trail, then recheck the engine.".into(),
+            );
+        }
+        return Ok(());
+    }
+
+    for (flag, value) in requested {
+        args.push(flag.into());
+        args.push(value.into());
+    }
+    Ok(())
+}
+
 fn safe_name(name: &str) -> String {
     let cleaned: String = name
         .chars()
@@ -549,7 +639,17 @@ fn start_job(
         }
         None => (PathBuf::from(&request.input), None, 0),
     };
-    let args = build_args(&request, &input);
+    let mut args = build_args(&request, &input);
+    let policies = hardware_policies()
+        .lock()
+        .map_err(|_| "Hardware policy state is unavailable")?
+        .clone();
+    append_hardware_args(
+        &request,
+        &mut args,
+        &policies,
+        engine_supports_hardware_policies(&executable),
+    )?;
 
     let mut slot = state
         .current
@@ -764,6 +864,7 @@ pub fn run() {
         .manage(UiState::default())
         .invoke_handler(tauri::generate_handler![
             detect_engine,
+            set_hardware_policies,
             scan_photos,
             start_job,
             stop_job,
@@ -789,5 +890,13 @@ mod tests {
     #[test]
     fn safe_stage_names_keep_extensions() {
         assert_eq!(safe_name("IMG 0001.CR3"), "IMG_0001.CR3");
+    }
+
+    #[test]
+    fn hardware_policy_defaults_are_auto() {
+        let policy = HardwarePolicies::default();
+        assert_eq!(policy.group_hardware, "auto");
+        assert_eq!(policy.trail_hardware, "auto");
+        assert_eq!(policy.timelapse_hardware, "auto");
     }
 }
