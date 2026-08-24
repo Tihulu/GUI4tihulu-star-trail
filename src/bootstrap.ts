@@ -23,6 +23,7 @@ async function bootFeatures(): Promise<void> {
   await loadFeature("Branding", () => import("./branding"));
   await loadFeature("RenderOptions", () => import("./render-options"));
   await loadFeature("HardwareOptions", () => import("./hardware-options"));
+  await loadFeature("EngineCompat", () => import("./engine-compat"));
   await loadFeature("ParameterInfo", () => import("./parameter-info"));
   await loadFeature("PhotoThumbnailManager", () => import("./photo-thumbnail-manager"));
   await loadFeature("StudioEditor", () => import("./studio-editor"));
