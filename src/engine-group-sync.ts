@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { invoke } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
 type PhotoInfo = {
@@ -12,14 +12,24 @@ type PhotoInfo = {
   browserPreviewable: boolean;
 };
 type JobFinished = { success: boolean; code: number | null };
-type EngineGroup = { name: string; basenames: string[] };
+type EngineGroup = { name: string; sources: string[] };
+type ManifestFile = { source?: string; group_path?: string };
+type ManifestGroup = { name?: string; files?: ManifestFile[] };
+type EngineManifest = { groups?: ManifestGroup[] };
+
+let lastStartedMode: string | null = null;
 
 queueMicrotask(() => {
   installSyncButton();
+  document.querySelector<HTMLButtonElement>("#startJob")?.addEventListener("click", () => {
+    lastStartedMode = document.querySelector<HTMLButtonElement>(".mode-tab.active")?.dataset.mode ?? null;
+  }, true);
+
   void listen<JobFinished>("job-finished", (event) => {
     if (!event.payload.success) return;
-    const mode = document.querySelector<HTMLButtonElement>(".mode-tab.active")?.dataset.mode;
-    if (mode === "group" || mode === "run") window.setTimeout(() => void syncEngineGroups(false), 350);
+    const mode = lastStartedMode ?? document.querySelector<HTMLButtonElement>(".mode-tab.active")?.dataset.mode;
+    if (mode !== "group" && mode !== "run") return;
+    window.setTimeout(() => void syncAfterSuccessfulJob(mode), 250);
   });
 });
 
@@ -31,12 +41,39 @@ function installSyncButton(): void {
   button.type = "button";
   button.className = "ghost-button compact-button";
   button.textContent = "Sync engine groups";
-  button.title = "Read group_* folders from the current output and map them back to the Photo Workspace";
-  button.addEventListener("click", () => void syncEngineGroups(true));
+  button.title = "Read manifest.json/group_* output and map engine groups back to the Photo Workspace";
+  button.addEventListener("click", () => void syncEngineGroups(true, true));
   actions.insertBefore(button, actions.querySelector("#studioGroupUndo"));
 }
 
-async function syncEngineGroups(showMessages: boolean): Promise<void> {
+async function syncAfterSuccessfulJob(mode: string): Promise<void> {
+  // Group-only is a curation workflow: take the user straight to the workspace
+  // and make the newly created groups visible. Full run syncs in place without
+  // forcing a workspace switch.
+  if (mode === "group") {
+    document.querySelector<HTMLButtonElement>('.section-tab[data-section="photos"]')?.click();
+  }
+  const ready = await ensureSourceWorkspaceLoaded();
+  if (!ready) {
+    toast("Grouping finished, but the source workspace could not be loaded automatically.");
+    return;
+  }
+  await syncEngineGroups(mode === "group", false);
+}
+
+async function ensureSourceWorkspaceLoaded(): Promise<boolean> {
+  if (document.querySelector("#photoGrid .photo-tile[data-path]")) return true;
+  const scan = document.querySelector<HTMLButtonElement>("#scanFromProcess");
+  if (!scan) return false;
+  scan.click();
+  return waitFor(() => Boolean(document.querySelector("#photoGrid .photo-tile[data-path]")), 12000);
+}
+
+async function syncEngineGroups(showMessages: boolean, switchToWorkspace: boolean): Promise<void> {
+  if (switchToWorkspace) {
+    document.querySelector<HTMLButtonElement>('.section-tab[data-section="photos"]')?.click();
+  }
+
   const output = document.querySelector<HTMLElement>("#outputPath");
   if (!output || output.classList.contains("empty")) {
     if (showMessages) toast("Choose or create a grouped output first.");
@@ -44,72 +81,114 @@ async function syncEngineGroups(showMessages: boolean): Promise<void> {
   }
   const outputPath = output.textContent?.trim() ?? "";
   if (!outputPath) return;
+
+  if (!document.querySelector("#photoGrid .photo-tile[data-path]")) {
+    const ready = await ensureSourceWorkspaceLoaded();
+    if (!ready) {
+      if (showMessages) toast("Load the source photos in Photo Workspace first.");
+      return;
+    }
+  }
+
   const sourceTiles = Array.from(document.querySelectorAll<HTMLElement>("#photoGrid .photo-tile[data-path]"));
-  if (sourceTiles.length === 0) {
-    if (showMessages) toast("Load the source photos in Photo Workspace first.");
-    return;
-  }
-
-  let photos: PhotoInfo[];
-  try {
-    photos = await invoke<PhotoInfo[]>("scan_photos", { input: outputPath, recursive: true });
-  } catch (error) {
-    if (showMessages) toast(`Could not read grouped output: ${String(error)}`);
-    return;
-  }
-
-  const groups = engineGroupsFromOutput(photos);
+  let groups = await groupsFromManifest(outputPath);
+  if (groups.length === 0) groups = await groupsFromMaterializedOutput(outputPath);
   if (groups.length === 0) {
-    if (showMessages) toast("No materialized group_* photo folders were found in the output.");
+    if (showMessages) toast("No engine groups were found in manifest.json or group_* folders.");
     return;
   }
 
   const sourceByBase = new Map<string, string[]>();
+  const sourceByPath = new Map<string, string>();
   for (const tile of sourceTiles) {
     const path = tile.dataset.path;
     if (!path) continue;
+    sourceByPath.set(normalizePath(path), path);
     const key = normalizeBase(path);
     if (!sourceByBase.has(key)) sourceByBase.set(key, []);
     sourceByBase.get(key)!.push(path);
   }
 
   let matched = 0;
+  let groupsMatched = 0;
   document.querySelector<HTMLButtonElement>("#studioShowAll")?.click();
   await nextFrame();
 
   for (const group of groups) {
     const targetPaths: string[] = [];
-    const pools = new Map<string, string[]>([...sourceByBase].map(([key, values]) => [key, [...values]]));
-    for (const base of group.basenames) {
-      const pool = pools.get(normalizeBase(base));
-      const path = pool?.shift();
-      if (path) targetPaths.push(path);
+    const used = new Set<string>();
+    for (const source of group.sources) {
+      const exact = sourceByPath.get(normalizePath(source));
+      if (exact && !used.has(exact)) {
+        targetPaths.push(exact);
+        used.add(exact);
+        continue;
+      }
+      const pool = sourceByBase.get(normalizeBase(source)) ?? [];
+      const candidate = pool.find((path) => !used.has(path));
+      if (candidate) {
+        targetPaths.push(candidate);
+        used.add(candidate);
+      }
     }
     if (targetPaths.length === 0) continue;
     matched += targetPaths.length;
+    groupsMatched += 1;
     await selectPaths(targetPaths);
     await ensureGroupAndMove(group.name);
   }
 
   document.querySelector<HTMLButtonElement>("#studioShowAll")?.click();
-  if (showMessages || matched > 0) toast(`Synced ${groups.length} engine group(s) · ${matched} source frame(s) matched.`);
+  await nextFrame();
+  if (showMessages || matched > 0) {
+    toast(`Synced ${groupsMatched}/${groups.length} engine group(s) · ${matched} source frame(s) matched.`);
+  }
 }
 
-function engineGroupsFromOutput(photos: PhotoInfo[]): EngineGroup[] {
+async function groupsFromManifest(outputPath: string): Promise<EngineGroup[]> {
+  const separator = outputPath.includes("\\") ? "\\" : "/";
+  const manifestPath = `${outputPath.replace(/[\\/]+$/, "")}${separator}manifest.json`;
+  try {
+    const response = await fetch(convertFileSrc(manifestPath));
+    if (!response.ok) return [];
+    const manifest = await response.json() as EngineManifest;
+    return (manifest.groups ?? []).map((group, index) => ({
+      name: group.name?.trim() || `group_${String(index + 1).padStart(3, "0")}`,
+      sources: (group.files ?? []).map((file) => file.source || file.group_path || "").filter(Boolean),
+    })).filter((group) => group.sources.length > 0);
+  } catch {
+    return [];
+  }
+}
+
+async function groupsFromMaterializedOutput(outputPath: string): Promise<EngineGroup[]> {
+  let photos: PhotoInfo[];
+  try {
+    photos = await invoke<PhotoInfo[]>("scan_photos", { input: outputPath, recursive: true });
+  } catch {
+    return [];
+  }
   const map = new Map<string, string[]>();
   for (const photo of photos) {
     const parts = photo.path.split(/[\\/]/).filter(Boolean);
-    const groupName = parts.find((part) => /^group[_ -]?/i.test(part));
+    const groupName = parts.find((part) => /^group[_ -]?\d*/i.test(part));
     if (!groupName) continue;
     if (!map.has(groupName)) map.set(groupName, []);
     map.get(groupName)!.push(photo.name);
   }
-  return [...map.entries()].map(([name, basenames]) => ({ name, basenames }));
+  return [...map.entries()].map(([name, sources]) => ({ name, sources }));
+}
+
+function normalizePath(value: string): string {
+  return value.replace(/\\/g, "/").replace(/\/+$/, "").toLocaleLowerCase();
 }
 
 function normalizeBase(value: string): string {
-  const base = value.split(/[\\/]/).pop() ?? value;
-  return base.replace(/^\d{6}_/, "").toLocaleLowerCase();
+  let base = value.split(/[\\/]/).pop() ?? value;
+  // Workspace staging uses 000001_name; grouped materialization uses 0001_name.
+  // Strip both so engine output maps back to the original source tile.
+  base = base.replace(/^\d{6}_/, "").replace(/^\d{4}_/, "");
+  return base.toLocaleLowerCase();
 }
 
 async function selectPaths(paths: string[]): Promise<void> {
@@ -144,11 +223,23 @@ async function ensureGroupAndMove(name: string): Promise<void> {
   }
 }
 
+function waitFor(predicate: () => boolean, timeoutMs: number): Promise<boolean> {
+  const started = performance.now();
+  return new Promise((resolve) => {
+    const tick = () => {
+      if (predicate()) { resolve(true); return; }
+      if (performance.now() - started >= timeoutMs) { resolve(false); return; }
+      window.setTimeout(tick, 100);
+    };
+    tick();
+  });
+}
+
 function nextFrame(): Promise<void> { return new Promise((resolve) => requestAnimationFrame(() => resolve())); }
 function toast(message: string): void {
   let node = document.querySelector<HTMLDivElement>("#studioToast");
   if (!node) { node = document.createElement("div"); node.id = "studioToast"; node.className = "studio-toast"; document.body.append(node); }
   node.textContent = message;
   node.classList.add("show");
-  window.setTimeout(() => node?.classList.remove("show"), 2600);
+  window.setTimeout(() => node?.classList.remove("show"), 3200);
 }
