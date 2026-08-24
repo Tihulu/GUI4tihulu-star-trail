@@ -13,8 +13,7 @@ fail() { printf '\nError: %s\n' "$1" >&2; exit 1; }
 command -v curl >/dev/null 2>&1 || fail "curl is required."
 
 case "$OS" in
-  Darwin)
-    ;;
+  Darwin) ;;
   Linux)
     case "$ARCH" in
       x86_64|amd64) ;;
@@ -25,38 +24,48 @@ case "$OS" in
 esac
 
 find_tihulu() {
-  if command -v tihulu >/dev/null 2>&1; then
-    command -v tihulu
+  # Prefer the GUI-managed/current-user engine over an older system package.
+  if [ -x "$HOME/.local/share/gui4tihulu-star-trail/cli-venv/bin/tihulu" ]; then
+    printf '%s\n' "$HOME/.local/share/gui4tihulu-star-trail/cli-venv/bin/tihulu"
     return 0
   fi
   if [ -x "$HOME/.local/bin/tihulu" ]; then
     printf '%s\n' "$HOME/.local/bin/tihulu"
     return 0
   fi
-  if [ -x "$HOME/.local/share/gui4tihulu-star-trail/cli-venv/bin/tihulu" ]; then
-    printf '%s\n' "$HOME/.local/share/gui4tihulu-star-trail/cli-venv/bin/tihulu"
+  if command -v tihulu >/dev/null 2>&1; then
+    command -v tihulu
     return 0
   fi
   return 1
+}
+
+engine_supports_policies() {
+  [ -x "$1" ] || return 1
+  HELP="$($1 run --help 2>&1 || true)"
+  printf '%s' "$HELP" | grep -q -- '--group-hardware' || return 1
+  printf '%s' "$HELP" | grep -q -- '--trail-hardware' || return 1
+  printf '%s' "$HELP" | grep -q -- '--timelapse-hardware' || return 1
 }
 
 install_engine_fallback() {
   PYTHON=""
   if command -v python3 >/dev/null 2>&1; then PYTHON="$(command -v python3)"; fi
   if [ -z "$PYTHON" ] && command -v python >/dev/null 2>&1; then PYTHON="$(command -v python)"; fi
-  [ -n "$PYTHON" ] || fail "Python 3 is required to install tihulu-star-trail on this Linux distribution."
+  [ -n "$PYTHON" ] || fail "Python 3 is required to install tihulu-star-trail."
 
   ROOT="$HOME/.local/share/gui4tihulu-star-trail"
   VENV="$ROOT/cli-venv"
   mkdir -p "$ROOT" "$HOME/.local/bin"
-  "$PYTHON" -m venv "$VENV" || fail "Could not create a Python virtual environment. Install your distribution's python3-venv package and rerun."
-  "$VENV/bin/python" -m pip install --upgrade pip
-  "$VENV/bin/python" -m pip install "tihulu-star-trail[video] @ https://github.com/$ENGINE_REPO/archive/refs/heads/main.zip"
+  if [ ! -x "$VENV/bin/python" ]; then
+    "$PYTHON" -m venv "$VENV" || fail "Could not create a Python virtual environment. Install python3-venv and rerun."
+  fi
+  "$VENV/bin/python" -m pip install --upgrade pip setuptools wheel
+  "$VENV/bin/python" -m pip install --upgrade --force-reinstall "tihulu-star-trail[video] @ https://github.com/$ENGINE_REPO/archive/refs/heads/main.zip"
   ln -sf "$VENV/bin/tihulu" "$HOME/.local/bin/tihulu"
 }
 
-if ! ENGINE_PATH="$(find_tihulu 2>/dev/null)"; then
-  say "tihulu-star-trail is not installed — installing the engine"
+install_current_engine() {
   case "$OS" in
     Darwin)
       curl -fsSL "https://raw.githubusercontent.com/$ENGINE_REPO/main/macos/install.sh" | sh
@@ -69,13 +78,23 @@ if ! ENGINE_PATH="$(find_tihulu 2>/dev/null)"; then
       fi
       ;;
   esac
-  ENGINE_PATH="$(find_tihulu 2>/dev/null || true)"
-  [ -n "$ENGINE_PATH" ] || fail "tihulu-star-trail installation finished but the tihulu launcher was not found."
+}
+
+ENGINE_PATH="$(find_tihulu 2>/dev/null || true)"
+if [ -z "$ENGINE_PATH" ]; then
+  say "tihulu-star-trail is not installed — installing the current engine"
+  install_current_engine
+elif engine_supports_policies "$ENGINE_PATH"; then
+  say "Found compatible tihulu-star-trail: $ENGINE_PATH"
 else
-  say "Found tihulu-star-trail: $ENGINE_PATH"
+  say "Installed tihulu engine is older than this GUI — updating it"
+  install_current_engine
 fi
 
+ENGINE_PATH="$(find_tihulu 2>/dev/null || true)"
+[ -n "$ENGINE_PATH" ] || fail "tihulu-star-trail installation finished but the tihulu launcher was not found."
 "$ENGINE_PATH" --help >/dev/null 2>&1 || fail "The tihulu launcher exists but could not be executed."
+engine_supports_policies "$ENGINE_PATH" || fail "The engine was installed but is still missing the required group/trail/timelapse hardware controls."
 
 PYTHON=""
 if command -v python3 >/dev/null 2>&1; then PYTHON="$(command -v python3)"; fi
@@ -101,10 +120,7 @@ if os_name == "Darwin":
     candidates = [a for a in assets if a.get("name", "").lower().endswith(".dmg")]
 else:
     candidates = [a for a in assets if a.get("name", "").lower().endswith(".appimage")]
-    preferred = [
-        a for a in candidates
-        if any(token in a.get("name", "").lower() for token in ("x86_64", "amd64", "x64"))
-    ]
+    preferred = [a for a in candidates if any(token in a.get("name", "").lower() for token in ("x86_64", "amd64", "x64"))]
     if preferred:
         candidates = preferred
 if not candidates:
@@ -137,6 +153,11 @@ case "$OS" in
     ;;
   Linux)
     mkdir -p "$HOME/.local/bin" "$HOME/.local/share/applications"
+    ICON_DIR="$HOME/.local/share/icons/hicolor/scalable/apps"
+    mkdir -p "$ICON_DIR"
+    ICON_PATH="$ICON_DIR/tihulu-star-trail-studio.svg"
+    curl -fsSL "https://raw.githubusercontent.com/$GUI_REPO/main/app-icon.svg" -o "$ICON_PATH"
+
     APPIMAGE="$HOME/.local/bin/tihulu-star-trail-studio"
     curl -fL "$ASSET_URL" -o "$APPIMAGE"
     chmod +x "$APPIMAGE"
@@ -146,14 +167,17 @@ Type=Application
 Name=Tihulu Star Trail Studio
 Comment=Modern GUI for tihulu-star-trail
 Exec=$APPIMAGE
+Icon=$ICON_PATH
 Terminal=false
 Categories=Graphics;Photography;
 StartupNotify=true
 EOF
+    command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "$HOME/.local/share/applications" >/dev/null 2>&1 || true
     say "Installed Tihulu Star Trail Studio"
     printf 'Launch from your app menu or run: %s\n' "$APPIMAGE"
     ;;
 esac
 
 printf '\nEngine: %s\n' "$ENGINE_PATH"
+printf 'Engine hardware controls: Auto / CPU / GPU / GPU+CPU ready\n'
 printf 'License: GNU AGPL v3 (AGPL-3.0-only)\n'
