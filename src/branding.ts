@@ -29,7 +29,7 @@ function installBranding(): boolean {
   if (!brandMark.querySelector(".brand-logo-svg")) brandMark.innerHTML = LOGO;
 
   const footerVersion = document.querySelector<HTMLElement>(".footer > span");
-  if (footerVersion) footerVersion.textContent = "GUI4tihulu-star-trail · AGPL-3.0-only · v0.3.4";
+  if (footerVersion) footerVersion.textContent = "GUI4tihulu-star-trail · AGPL-3.0-only · v0.3.5";
   return true;
 }
 
@@ -38,7 +38,7 @@ function startBranding(): void {
   let attempts = 0;
   const timer = window.setInterval(() => {
     attempts += 1;
-    if (installBranding() || attempts >= 120) window.clearInterval(timer);
+    if (installBranding() || attempts >= 240) window.clearInterval(timer);
   }, 50);
 }
 
