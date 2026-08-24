@@ -3,7 +3,7 @@ name = "gui4tihulu-star-trail"
 version = "0.2.0"
 description = "Modern cross-platform desktop GUI for tihulu-star-trail"
 authors = ["Tihulu contributors"]
-edition = "2021"
+edition = "2024"
 license = "AGPL-3.0-only"
 
 [lib]
@@ -14,8 +14,6 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-chrono = { version = "0.4", default-features = false, features = ["std"] }
-kamadak-exif = "0.6"
 serde = { version = "1", features = ["derive"] }
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
