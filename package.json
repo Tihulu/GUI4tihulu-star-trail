@@ -1,7 +1,7 @@
 {
   "name": "gui4tihulu-star-trail",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Modern cross-platform desktop GUI for tihulu-star-trail",
   "license": "AGPL-3.0-only",
   "type": "module",
