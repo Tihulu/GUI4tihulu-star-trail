@@ -22,25 +22,6 @@ type QueueTask<T> = {
   reject: (error: unknown) => void;
 };
 
-type DecoderTrack = {
-  codedWidth?: number;
-  codedHeight?: number;
-};
-
-type DecoderLike = {
-  tracks: { ready: Promise<void>; selectedTrack?: DecoderTrack | null };
-  decode: (options?: { frameIndex?: number }) => Promise<{ image: unknown }>;
-  close: () => void;
-};
-
-type DecoderConstructor = new (options: {
-  data: ArrayBuffer;
-  type: string;
-  preferAnimation?: boolean;
-  desiredWidth?: number;
-  desiredHeight?: number;
-}) => DecoderLike;
-
 const cache = new Map<string, CacheEntry>();
 const inFlight = new Map<string, Promise<CacheEntry | null>>();
 const fallbackKeys = new Set<string>();
@@ -228,20 +209,22 @@ async function drawToBlob(drawable: CanvasImageSource, width: number, height: nu
 }
 
 async function decodeWithWebCodecs(blob: Blob, source: string, maxWidth: number, maxHeight: number): Promise<CacheEntry | null> {
-  const Decoder = (globalThis as typeof globalThis & { ImageDecoder?: DecoderConstructor }).ImageDecoder;
+  // WebView implementations expose slightly different ImageDecoder typings.
+  // Runtime feature detection is more reliable here than binding to one DOM lib version.
+  const Decoder = (globalThis as any).ImageDecoder as any;
   if (!Decoder) return null;
 
   const data = await blob.arrayBuffer();
   const type = blob.type || mimeFromSource(source);
-  let probe: DecoderLike | null = null;
-  let decoder: DecoderLike | null = null;
-  let frame: { close?: () => void } | null = null;
+  let probe: any = null;
+  let decoder: any = null;
+  let frame: any = null;
   try {
     probe = new Decoder({ data: data.slice(0), type, preferAnimation: false });
     await probe.tracks.ready;
     const track = probe.tracks.selectedTrack;
-    const sourceWidth = Number(track?.codedWidth ?? 0);
-    const sourceHeight = Number(track?.codedHeight ?? 0);
+    const sourceWidth = Number(track?.codedWidth ?? track?.displayWidth ?? 0);
+    const sourceHeight = Number(track?.codedHeight ?? track?.displayHeight ?? 0);
     if (sourceWidth <= 0 || sourceHeight <= 0) return null;
     const [targetWidth, targetHeight] = fitSize(sourceWidth, sourceHeight, maxWidth, maxHeight);
     probe.close();
@@ -255,15 +238,15 @@ async function decodeWithWebCodecs(blob: Blob, source: string, maxWidth: number,
       desiredHeight: targetHeight,
     });
     const decoded = await decoder.decode({ frameIndex: 0 });
-    frame = decoded.image as { close?: () => void };
+    frame = decoded.image;
     const output = await drawToBlob(decoded.image as CanvasImageSource, targetWidth, targetHeight);
     return { url: URL.createObjectURL(output), bytes: targetWidth * targetHeight * 4 };
   } catch {
     return null;
   } finally {
     frame?.close?.();
-    probe?.close();
-    decoder?.close();
+    probe?.close?.();
+    decoder?.close?.();
   }
 }
 
