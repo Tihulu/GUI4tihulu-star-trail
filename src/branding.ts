@@ -52,3 +52,5 @@ function startBranding(): void {
 
 if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", startBranding, { once: true });
 else startBranding();
+
+export {};
