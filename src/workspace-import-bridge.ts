@@ -10,6 +10,8 @@ type StudioState = {
 type ResolvedGroup = { name: string; paths: string[] };
 type GroupsResolvedDetail = { groups: ResolvedGroup[]; source: string; output: string };
 
+let importing = false;
+
 function qs<T extends Element>(selector: string): T | null {
   return document.querySelector<T>(selector);
 }
@@ -52,101 +54,113 @@ function previousEdits(source: string): Array<[string, unknown]> {
   }
 }
 
-async function waitForGroupCards(timeoutMs: number): Promise<boolean> {
+async function waitFor(predicate: () => boolean, timeoutMs: number): Promise<boolean> {
   const started = performance.now();
   while (performance.now() - started < timeoutMs) {
-    if (qs("#studioGroupList .studio-group-card[data-group-id]")) return true;
+    if (predicate()) return true;
     await delay(80);
   }
   return false;
 }
 
-async function forceStudioStateReload(source: string): Promise<boolean> {
+async function forceStudioStateReload(source: string, state: StudioState): Promise<boolean> {
   const label = qs<HTMLElement>("#photoSourcePath");
-  const grid = qs<HTMLElement>("#photoGrid");
   const firstTile = qs<HTMLElement>("#photoGrid .photo-tile[data-path]");
-  if (!label || !grid || !firstTile) return false;
+  const rescan = qs<HTMLButtonElement>("#rescanPhotos");
+  if (!label || !firstTile) return false;
 
-  // studio-editor keeps group data in closure-local variables and reloads persisted
-  // state when its observed grid mutates while the source key changes. Drive that
-  // public restore path explicitly: first move it off the real key, then back.
-  const originalVisibility = label.style.visibility;
-  label.style.visibility = "hidden";
+  // The editor intentionally owns group state in closure-local variables and reloads
+  // persisted state only when its source key changes. Move it to a disposable key,
+  // let its observer consume that change, then persist the engine groups and use the
+  // real Photo Workspace rescan path to return to the original source key.
+  const fakeSource = `${source}#engine-import-${Date.now()}`;
+  label.textContent = fakeSource;
+  firstTile.classList.toggle("workspace-import-arm");
+  await delay(260);
 
-  label.textContent = `${source}#engine-import-${Date.now()}`;
-  firstTile.classList.toggle("workspace-import-phase-a");
-  await delay(140);
+  // Write only after the editor has moved off the real key. This prevents any pending
+  // empty-state save from winning a race against the imported engine groups.
+  localStorage.setItem(storageKey(source), JSON.stringify(state));
 
-  label.textContent = source;
-  firstTile.classList.toggle("workspace-import-phase-b");
-  await delay(180);
-  label.style.visibility = originalVisibility;
-
-  let loaded = await waitForGroupCards(1600);
-  if (!loaded) {
-    // A real grid rebuild is a safe fallback and makes the editor observe the real
-    // source key again without asking the user to browse output/groups manually.
-    qs<HTMLButtonElement>("#rescanPhotos")?.click();
-    loaded = await waitForGroupCards(3500);
+  if (rescan) {
+    rescan.click();
+    const sourceRestored = await waitFor(() => {
+      const current = qs<HTMLElement>("#photoSourcePath")?.textContent?.trim() ?? "";
+      return normalizePath(current) === normalizePath(source)
+        && Boolean(qs("#photoGrid .photo-tile[data-path]"));
+    }, 10000);
+    if (!sourceRestored) return false;
+  } else {
+    label.textContent = source;
+    firstTile.classList.toggle("workspace-import-return");
+    await delay(260);
   }
-  return loaded;
+
+  return waitFor(() => Boolean(qs("#studioGroupList .studio-group-card[data-group-id]")), 5000);
 }
 
 async function selectFirstGroupFrame(): Promise<void> {
   const opener = qs<HTMLButtonElement>("#studioGroupList .studio-group-card[data-group-id] .group-open");
   opener?.click();
-  await delay(100);
+  await delay(120);
+  qs<HTMLButtonElement>("#clearPhotoSelection")?.click();
+  await delay(40);
   const firstVisible = Array.from(document.querySelectorAll<HTMLElement>("#photoGrid .photo-tile[data-path]"))
     .find((tile) => !tile.classList.contains("studio-group-hidden"));
   firstVisible?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 }
 
 async function importResolvedGroups(detail: GroupsResolvedDetail): Promise<void> {
-  const sourceLabel = qs<HTMLElement>("#photoSourcePath")?.textContent?.trim() ?? "";
-  if (!detail?.source || normalizePath(sourceLabel) !== normalizePath(detail.source)) return;
+  if (importing) return;
+  importing = true;
+  try {
+    const sourceLabel = qs<HTMLElement>("#photoSourcePath")?.textContent?.trim() ?? "";
+    if (!detail?.source || normalizePath(sourceLabel) !== normalizePath(detail.source)) return;
 
-  const paths = tilePaths();
-  if (!paths.length) return;
-  const available = new Set(paths);
-  const assignments = new Map<string, string | null>(paths.map((path) => [path, null]));
-  const groups: GroupRecord[] = [];
+    const paths = tilePaths();
+    if (!paths.length) return;
+    const available = new Set(paths);
+    const assignments = new Map<string, string | null>(paths.map((path) => [path, null]));
+    const groups: GroupRecord[] = [];
 
-  for (const resolved of detail.groups ?? []) {
-    const valid = resolved.paths.filter((path) => available.has(path));
-    if (!valid.length) continue;
-    const group: GroupRecord = { id: crypto.randomUUID(), name: uniqueName(resolved.name, groups) };
-    groups.push(group);
-    for (const path of valid) assignments.set(path, group.id);
+    for (const resolved of detail.groups ?? []) {
+      const valid = resolved.paths.filter((path) => available.has(path));
+      if (!valid.length) continue;
+      const group: GroupRecord = { id: crypto.randomUUID(), name: uniqueName(resolved.name, groups) };
+      groups.push(group);
+      for (const path of valid) assignments.set(path, group.id);
+    }
+
+    if (!groups.length) return;
+
+    const state: StudioState = {
+      version: 1,
+      groups,
+      assignments: [...assignments],
+      edits: previousEdits(detail.source),
+    };
+
+    const loaded = await forceStudioStateReload(detail.source, state);
+    if (!loaded) {
+      console.error("[Tihulu Studio] engine groups were persisted but Studio did not reload them after rescan");
+      return;
+    }
+
+    await selectFirstGroupFrame();
+    window.dispatchEvent(new CustomEvent("tihulu:workspace-groups-imported", {
+      detail: {
+        groups: groups.length,
+        frames: [...assignments.values()].filter(Boolean).length,
+        source: detail.source,
+      },
+    }));
+  } finally {
+    importing = false;
   }
-
-  if (!groups.length) return;
-
-  const state: StudioState = {
-    version: 1,
-    groups,
-    assignments: [...assignments],
-    edits: previousEdits(detail.source),
-  };
-  localStorage.setItem(storageKey(detail.source), JSON.stringify(state));
-
-  const loaded = await forceStudioStateReload(detail.source);
-  if (!loaded) {
-    console.error("[Tihulu Studio] engine groups were persisted but Studio did not reload them");
-    return;
-  }
-
-  await selectFirstGroupFrame();
-  window.dispatchEvent(new CustomEvent("tihulu:workspace-groups-imported", {
-    detail: {
-      groups: groups.length,
-      frames: [...assignments.values()].filter(Boolean).length,
-      source: detail.source,
-    },
-  }));
 }
 
-// Register before workspace-parity. That module still owns navigation/drag/drop,
-// but this bridge exclusively owns engine -> Studio state import.
+// Register before workspace-parity. That module owns navigation/drag/drop UI,
+// while this bridge exclusively owns engine -> Studio state import.
 window.addEventListener("tihulu:engine-groups-resolved", (event) => {
   event.stopImmediatePropagation();
   const detail = (event as CustomEvent<GroupsResolvedDetail>).detail;
