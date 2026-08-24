@@ -55,6 +55,11 @@ async function selectPaths(paths: string[]): Promise<void> {
   }
 }
 
+function groupCard(groupId: string): HTMLElement | undefined {
+  return Array.from(document.querySelectorAll<HTMLElement>("#studioGroupList .studio-group-card[data-group-id]"))
+    .find((card) => card.dataset.groupId === groupId);
+}
+
 async function movePathsWithStudioUi(paths: string[], groupId: string): Promise<void> {
   if (!paths.length) return;
   await selectPaths(paths);
@@ -63,10 +68,11 @@ async function movePathsWithStudioUi(paths: string[], groupId: string): Promise<
   target.value = groupId;
   target.dispatchEvent(new Event("change", { bubbles: true }));
   await nextFrame();
-  qs<HTMLButtonElement>(`#studioGroupList .studio-group-card[data-group-id="${CSS.escape(groupId)}"] .group-open`)?.click();
+  groupCard(groupId)?.querySelector<HTMLButtonElement>(".group-open")?.click();
   await nextFrame();
   const first = visibleTiles()[0];
   if (first?.dataset.path) await selectOnly(first.dataset.path);
+  window.setTimeout(addGroupThumbnails, 220);
 }
 
 function stepFrame(offset: number): void {
@@ -149,6 +155,7 @@ function installParityBar(groupPanel: HTMLElement): void {
     if (!target) return;
     target.value = "__ungrouped__";
     target.dispatchEvent(new Event("change", { bubbles: true }));
+    window.setTimeout(addGroupThumbnails, 220);
   });
   qs<HTMLButtonElement>("#workspaceToggleThumbs")?.addEventListener("click", (event) => {
     const section = qs<HTMLElement>("#section-photos");
@@ -231,7 +238,7 @@ function install(): boolean {
       const active = qs<HTMLButtonElement>("#studioGroupList .studio-group-card.active .group-open")
         ?? qs<HTMLButtonElement>("#studioGroupList .studio-group-card:not(.all-card) .group-open");
       active?.click();
-    }, 0);
+    }, 220);
   });
   addGroupThumbnails();
   return true;
