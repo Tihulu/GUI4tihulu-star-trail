@@ -1,0 +1,33 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+import "./main";
+
+type Loader = () => Promise<unknown>;
+
+async function loadFeature(name: string, loader: Loader): Promise<void> {
+  try {
+    await loader();
+    document.documentElement.dataset[`module${name}`] = "ready";
+  } catch (error) {
+    console.error(`[Tihulu Studio] ${name} failed to load`, error);
+    document.documentElement.dataset[`module${name}`] = "failed";
+    window.dispatchEvent(new CustomEvent("tihulu:module-load-error", {
+      detail: { name, message: error instanceof Error ? error.message : String(error) },
+    }));
+  }
+}
+
+// Keep the core shell in main.ts. Everything below is isolated so one optional
+// workspace feature can never prevent branding, readiness or the other tools
+// from starting in a packaged Tauri build.
+await loadFeature("Branding", () => import("./branding"));
+await loadFeature("RenderOptions", () => import("./render-options"));
+await loadFeature("HardwareOptions", () => import("./hardware-options"));
+await loadFeature("ParameterInfo", () => import("./parameter-info"));
+await loadFeature("PhotoThumbnailManager", () => import("./photo-thumbnail-manager"));
+await loadFeature("StudioEditor", () => import("./studio-editor"));
+await loadFeature("WorkspaceParity", () => import("./workspace-parity"));
+await loadFeature("EngineGroupSync", () => import("./engine-group-sync"));
+await loadFeature("Readiness", () => import("./readiness"));
+
+document.documentElement.dataset.tihuluBootstrap = "ready";
+window.dispatchEvent(new CustomEvent("tihulu:bootstrap-ready"));
