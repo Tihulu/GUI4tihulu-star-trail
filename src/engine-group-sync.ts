@@ -13,14 +13,18 @@ type PhotoInfo = {
 };
 type JobFinished = { success: boolean; code: number | null };
 type EngineGroup = { name: string; sources: string[] };
+type ResolvedGroup = { name: string; paths: string[] };
 type ManifestFile = { source?: string; group_path?: string };
 type ManifestGroup = { name?: string; files?: ManifestFile[] };
 type EngineManifest = { groups?: ManifestGroup[] };
+type GroupsResolvedDetail = { groups: ResolvedGroup[]; source: string; output: string };
 
 let lastStartedMode: string | null = null;
 
-queueMicrotask(() => {
-  installSyncButton();
+start();
+
+function start(): void {
+  installWhenReady();
   document.querySelector<HTMLButtonElement>("#startJob")?.addEventListener("click", () => {
     lastStartedMode = document.querySelector<HTMLButtonElement>(".mode-tab.active")?.dataset.mode ?? null;
   }, true);
@@ -29,33 +33,39 @@ queueMicrotask(() => {
     if (!event.payload.success) return;
     const mode = lastStartedMode ?? document.querySelector<HTMLButtonElement>(".mode-tab.active")?.dataset.mode;
     if (mode !== "group" && mode !== "run") return;
-    window.setTimeout(() => void syncAfterSuccessfulJob(mode), 220);
+    window.setTimeout(() => void syncAfterSuccessfulJob(mode), 180);
   });
-});
+}
 
-function installSyncButton(): void {
+function installWhenReady(): void {
+  if (installSyncButton()) return;
+  let attempts = 0;
+  const timer = window.setInterval(() => {
+    attempts += 1;
+    if (installSyncButton() || attempts >= 160) window.clearInterval(timer);
+  }, 50);
+}
+
+function installSyncButton(): boolean {
   const actions = document.querySelector<HTMLElement>(".studio-command-actions");
-  if (!actions || document.querySelector("#studioSyncEngineGroups")) return;
+  if (!actions) return false;
+  if (document.querySelector("#studioSyncEngineGroups")) return true;
   const button = document.createElement("button");
   button.id = "studioSyncEngineGroups";
   button.type = "button";
   button.className = "ghost-button compact-button";
   button.textContent = "Sync engine groups";
-  button.title = "Read manifest.json/group_* output and map engine groups back to the original source frames";
+  button.title = "Import manifest.json/group_* output into the original source workspace";
   button.addEventListener("click", () => void syncEngineGroups(true, true));
   actions.insertBefore(button, actions.querySelector("#studioGroupUndo"));
+  return true;
 }
 
 async function syncAfterSuccessfulJob(mode: string): Promise<void> {
   if (mode === "group") {
     document.querySelector<HTMLButtonElement>('.section-tab[data-section="photos"]')?.click();
   }
-  const ready = await ensureSourceWorkspaceLoaded();
-  if (!ready) {
-    toast("Grouping finished, but the original source workspace could not be loaded automatically.");
-    return;
-  }
-  await syncEngineGroups(mode === "group", false);
+  await syncEngineGroups(mode === "group", mode === "group");
 }
 
 function processInputPath(): string {
@@ -76,15 +86,13 @@ async function ensureSourceWorkspaceLoaded(): Promise<boolean> {
   const hasTiles = Boolean(document.querySelector("#photoGrid .photo-tile[data-path]"));
   if (hasTiles && sourceMatches) return true;
 
-  // Never sync against output/groups or another arbitrary workspace. Always
-  // restore the original Process input first, then map engine groups onto it.
   const scan = document.querySelector<HTMLButtonElement>("#scanFromProcess");
   if (!scan) return false;
   scan.click();
   return waitFor(() => {
     const matches = normalizePath(workspaceSourcePath()) === normalizePath(processInput);
     return matches && Boolean(document.querySelector("#photoGrid .photo-tile[data-path]"));
-  }, 15000);
+  }, 20000);
 }
 
 async function syncEngineGroups(showMessages: boolean, switchToWorkspace: boolean): Promise<void> {
@@ -92,87 +100,92 @@ async function syncEngineGroups(showMessages: boolean, switchToWorkspace: boolea
     document.querySelector<HTMLButtonElement>('.section-tab[data-section="photos"]')?.click();
   }
 
-  const output = document.querySelector<HTMLElement>("#outputPath");
-  if (!output || output.classList.contains("empty")) {
-    if (showMessages) toast("Choose or create a grouped output first.");
+  const outputNode = document.querySelector<HTMLElement>("#outputPath");
+  if (!outputNode || outputNode.classList.contains("empty")) {
+    if (showMessages) toast("Choose an output folder first.");
     return;
   }
-  const outputPath = output.textContent?.trim() ?? "";
-  if (!outputPath) return;
+  const outputPath = outputNode.textContent?.trim() ?? "";
+  const sourcePath = processInputPath();
+  if (!sourcePath || !outputPath) {
+    if (showMessages) toast("Choose both the original input and output folders first.");
+    return;
+  }
 
   const ready = await ensureSourceWorkspaceLoaded();
   if (!ready) {
-    if (showMessages) toast("Load the original source photos in Photo Workspace first.");
+    toast("Grouping finished, but the original Process input could not be loaded into Photo Workspace.");
     return;
   }
 
   const sourceTiles = Array.from(document.querySelectorAll<HTMLElement>("#photoGrid .photo-tile[data-path]"));
-  const groups = await loadEngineGroupsWithRetry(outputPath);
-  if (groups.length === 0) {
-    if (showMessages) toast("No engine groups were found in manifest.json or group_* folders.");
+  const engineGroups = await loadEngineGroupsWithRetry(outputPath);
+  if (engineGroups.length === 0) {
+    if (showMessages) toast("No engine groups were found in manifest.json or group_* output folders.");
     return;
   }
 
-  const sourceByBase = new Map<string, string[]>();
-  const sourceByPath = new Map<string, string>();
-  for (const tile of sourceTiles) {
-    const path = tile.dataset.path;
-    if (!path) continue;
-    sourceByPath.set(normalizePath(path), path);
-    const key = normalizeBase(path);
-    if (!sourceByBase.has(key)) sourceByBase.set(key, []);
-    sourceByBase.get(key)!.push(path);
+  const resolvedGroups = resolveEngineGroups(engineGroups, sourceTiles);
+  const matched = resolvedGroups.reduce((sum, group) => sum + group.paths.length, 0);
+  if (resolvedGroups.length === 0 || matched === 0) {
+    toast("Engine groups were found, but none could be mapped back to the original source frames.");
+    return;
   }
 
-  let matched = 0;
-  let groupsMatched = 0;
-  document.querySelector<HTMLButtonElement>("#studioShowAll")?.click();
-  await nextFrame();
+  const detail: GroupsResolvedDetail = { groups: resolvedGroups, source: sourcePath, output: outputPath };
+  const ack = waitForWorkspaceImport(5000);
+  window.dispatchEvent(new CustomEvent<GroupsResolvedDetail>("tihulu:engine-groups-resolved", { detail }));
+  const imported = await ack;
 
-  for (const group of groups) {
-    const targetPaths: string[] = [];
-    const used = new Set<string>();
-    for (const source of group.sources) {
-      const exact = sourceByPath.get(normalizePath(source));
-      if (exact && !used.has(exact)) {
-        targetPaths.push(exact);
-        used.add(exact);
-        continue;
-      }
-      const pool = sourceByBase.get(normalizeBase(source)) ?? [];
-      const candidate = pool.find((path) => !used.has(path));
-      if (candidate) {
-        targetPaths.push(candidate);
-        used.add(candidate);
-      }
-    }
-    if (targetPaths.length === 0) continue;
-    matched += targetPaths.length;
-    groupsMatched += 1;
-    await selectPaths(targetPaths);
-    await ensureGroupAndMove(group.name);
-  }
-
-  document.querySelector<HTMLButtonElement>("#studioShowAll")?.click();
-  await nextFrame();
-  document.querySelector<HTMLButtonElement>("#studioGroupList .studio-group-card:not(.all-card) .group-open")?.click();
-  await nextFrame();
-  selectFirstVisibleFrame();
-
-  window.dispatchEvent(new CustomEvent("tihulu:engine-groups-synced", {
-    detail: { groups, groupsMatched, matched, source: processInputPath(), output: outputPath },
-  }));
-  if (showMessages || matched > 0) {
-    toast(`Synced ${groupsMatched}/${groups.length} engine group(s) · ${matched} original source frame(s) matched.`);
+  if (showMessages || imported) {
+    toast(imported
+      ? `Imported ${resolvedGroups.length} group(s) · ${matched} original frame(s) into Photo Workspace.`
+      : `Resolved ${resolvedGroups.length} group(s), but the workspace did not acknowledge the import.`);
   }
 }
 
+function resolveEngineGroups(engineGroups: EngineGroup[], sourceTiles: HTMLElement[]): ResolvedGroup[] {
+  const byExact = new Map<string, string>();
+  const byBase = new Map<string, string[]>();
+  for (const tile of sourceTiles) {
+    const path = tile.dataset.path;
+    if (!path) continue;
+    byExact.set(normalizePath(path), path);
+    const base = normalizeBase(path);
+    const pool = byBase.get(base) ?? [];
+    pool.push(path);
+    byBase.set(base, pool);
+  }
+
+  const consumed = new Set<string>();
+  const result: ResolvedGroup[] = [];
+  for (const engineGroup of engineGroups) {
+    const paths: string[] = [];
+    for (const source of engineGroup.sources) {
+      const exact = byExact.get(normalizePath(source));
+      if (exact && !consumed.has(exact)) {
+        paths.push(exact);
+        consumed.add(exact);
+        continue;
+      }
+      const pool = byBase.get(normalizeBase(source)) ?? [];
+      const candidate = pool.find((path) => !consumed.has(path));
+      if (candidate) {
+        paths.push(candidate);
+        consumed.add(candidate);
+      }
+    }
+    if (paths.length > 0) result.push({ name: engineGroup.name, paths });
+  }
+  return result;
+}
+
 async function loadEngineGroupsWithRetry(outputPath: string): Promise<EngineGroup[]> {
-  for (let attempt = 0; attempt < 8; attempt += 1) {
+  for (let attempt = 0; attempt < 12; attempt += 1) {
     let groups = await groupsFromManifest(outputPath);
     if (groups.length === 0) groups = await groupsFromMaterializedOutput(outputPath);
     if (groups.length > 0) return groups;
-    await delay(180 + attempt * 70);
+    await delay(180 + attempt * 80);
   }
   return [];
 }
@@ -205,8 +218,9 @@ async function groupsFromMaterializedOutput(outputPath: string): Promise<EngineG
     const parts = photo.path.split(/[\\/]/).filter(Boolean);
     const groupName = parts.find((part) => /^group[_ -]?\d*/i.test(part));
     if (!groupName) continue;
-    if (!map.has(groupName)) map.set(groupName, []);
-    map.get(groupName)!.push(photo.name);
+    const sources = map.get(groupName) ?? [];
+    sources.push(photo.path);
+    map.set(groupName, sources);
   }
   return [...map.entries()].map(([name, sources]) => ({ name, sources }));
 }
@@ -221,41 +235,19 @@ function normalizeBase(value: string): string {
   return base.toLocaleLowerCase();
 }
 
-async function selectPaths(paths: string[]): Promise<void> {
-  document.querySelector<HTMLButtonElement>("#clearPhotoSelection")?.click();
-  await nextFrame();
-  for (const path of paths) {
-    const tile = Array.from(document.querySelectorAll<HTMLElement>("#photoGrid .photo-tile[data-path]")).find((item) => item.dataset.path === path);
-    if (!tile) continue;
-    tile.dispatchEvent(new MouseEvent("click", { bubbles: true, ctrlKey: true }));
-    await nextFrame();
-  }
-}
-
-async function ensureGroupAndMove(name: string): Promise<void> {
-  const cards = () => Array.from(document.querySelectorAll<HTMLElement>("#studioGroupList .studio-group-card[data-group-id]"));
-  const existing = cards().find((card) => card.querySelector("strong")?.textContent?.trim() === name);
-  if (!existing) {
-    const originalPrompt = window.prompt;
-    window.prompt = () => name;
-    try { document.querySelector<HTMLButtonElement>("#studioNewGroup")?.click(); }
-    finally { window.prompt = originalPrompt; }
-    await nextFrame();
-    return;
-  }
-  const groupId = existing.dataset.groupId;
-  const moveTarget = document.querySelector<HTMLSelectElement>("#studioMoveTarget");
-  if (groupId && moveTarget) {
-    moveTarget.value = groupId;
-    moveTarget.dispatchEvent(new Event("change", { bubbles: true }));
-    await nextFrame();
-  }
-}
-
-function selectFirstVisibleFrame(): void {
-  const tile = Array.from(document.querySelectorAll<HTMLElement>("#photoGrid .photo-tile[data-path]"))
-    .find((item) => !item.classList.contains("studio-group-hidden"));
-  tile?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+function waitForWorkspaceImport(timeoutMs: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (value: boolean) => {
+      if (settled) return;
+      settled = true;
+      window.removeEventListener("tihulu:workspace-groups-imported", onImported as EventListener);
+      resolve(value);
+    };
+    const onImported = () => finish(true);
+    window.addEventListener("tihulu:workspace-groups-imported", onImported as EventListener, { once: true });
+    window.setTimeout(() => finish(false), timeoutMs);
+  });
 }
 
 function waitFor(predicate: () => boolean, timeoutMs: number): Promise<boolean> {
@@ -271,11 +263,10 @@ function waitFor(predicate: () => boolean, timeoutMs: number): Promise<boolean> 
 }
 
 function delay(ms: number): Promise<void> { return new Promise((resolve) => window.setTimeout(resolve, ms)); }
-function nextFrame(): Promise<void> { return new Promise((resolve) => requestAnimationFrame(() => resolve())); }
 function toast(message: string): void {
   let node = document.querySelector<HTMLDivElement>("#studioToast");
   if (!node) { node = document.createElement("div"); node.id = "studioToast"; node.className = "studio-toast"; document.body.append(node); }
   node.textContent = message;
   node.classList.add("show");
-  window.setTimeout(() => node?.classList.remove("show"), 3600);
+  window.setTimeout(() => node?.classList.remove("show"), 3800);
 }
