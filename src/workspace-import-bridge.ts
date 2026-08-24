@@ -63,40 +63,42 @@ async function waitFor(predicate: () => boolean, timeoutMs: number): Promise<boo
   return false;
 }
 
+async function pulseStudioObserver(): Promise<boolean> {
+  const grid = qs<HTMLElement>("#photoGrid");
+  if (!grid) return false;
+  const marker = document.createElement("span");
+  marker.hidden = true;
+  marker.dataset.workspaceImportPulse = String(Date.now());
+  grid.append(marker);
+  // MutationObserver callbacks run before the timer task. This gives Studio Editor
+  // enough time to consume the current source key before the next phase begins.
+  await delay(0);
+  marker.remove();
+  await delay(120);
+  return true;
+}
+
 async function forceStudioStateReload(source: string, state: StudioState): Promise<boolean> {
   const label = qs<HTMLElement>("#photoSourcePath");
   const firstTile = qs<HTMLElement>("#photoGrid .photo-tile[data-path]");
-  const rescan = qs<HTMLButtonElement>("#rescanPhotos");
   if (!label || !firstTile) return false;
 
-  // The editor intentionally owns group state in closure-local variables and reloads
-  // persisted state only when its source key changes. Move it to a disposable key,
-  // let its observer consume that change, then persist the engine groups and use the
-  // real Photo Workspace rescan path to return to the original source key.
+  // Studio Editor owns group state in closure-local variables and only reloads
+  // persisted state when its source key changes. Drive that exact mechanism without
+  // rescanning or replacing any photo tiles: first move to a disposable key, pulse
+  // the observed grid, then persist the resolved groups and pulse again on the real key.
   const fakeSource = `${source}#engine-import-${Date.now()}`;
   label.textContent = fakeSource;
-  firstTile.classList.toggle("workspace-import-arm");
-  await delay(260);
+  if (!await pulseStudioObserver()) return false;
 
-  // Write only after the editor has moved off the real key. This prevents any pending
-  // empty-state save from winning a race against the imported engine groups.
+  // Write only after Studio has consumed the disposable key. This prevents stale
+  // empty state from racing the engine import.
   localStorage.setItem(storageKey(source), JSON.stringify(state));
 
-  if (rescan) {
-    rescan.click();
-    const sourceRestored = await waitFor(() => {
-      const current = qs<HTMLElement>("#photoSourcePath")?.textContent?.trim() ?? "";
-      return normalizePath(current) === normalizePath(source)
-        && Boolean(qs("#photoGrid .photo-tile[data-path]"));
-    }, 10000);
-    if (!sourceRestored) return false;
-  } else {
-    label.textContent = source;
-    firstTile.classList.toggle("workspace-import-return");
-    await delay(260);
-  }
+  label.textContent = source;
+  if (!await pulseStudioObserver()) return false;
 
-  return waitFor(() => Boolean(qs("#studioGroupList .studio-group-card[data-group-id]")), 5000);
+  return waitFor(() => Boolean(qs("#studioGroupList .studio-group-card[data-group-id]")), 3000);
 }
 
 async function selectFirstGroupFrame(): Promise<void> {
@@ -142,7 +144,7 @@ async function importResolvedGroups(detail: GroupsResolvedDetail): Promise<void>
 
     const loaded = await forceStudioStateReload(detail.source, state);
     if (!loaded) {
-      console.error("[Tihulu Studio] engine groups were persisted but Studio did not reload them after rescan");
+      console.error("[Tihulu Studio] engine groups were persisted but Studio did not reload them after the observer pulse");
       return;
     }
 
