@@ -99,14 +99,23 @@ function addGroupThumbnails(): void {
   const state = storedState();
   const assignments = new Map(state?.assignments ?? []);
   for (const card of Array.from(list.querySelectorAll<HTMLElement>(".studio-group-card[data-group-id]"))) {
-    card.querySelector(".workspace-group-thumb")?.remove();
-    if (!groupThumbsEnabled) continue;
+    const existing = card.querySelector<HTMLImageElement>(".workspace-group-thumb");
+    if (!groupThumbsEnabled) {
+      existing?.remove();
+      continue;
+    }
     const groupId = card.dataset.groupId;
     if (!groupId) continue;
     const path = [...assignments].find(([, id]) => id === groupId)?.[0];
-    if (!path) continue;
+    if (!path) {
+      existing?.remove();
+      continue;
+    }
+    if (existing?.dataset.sourcePath === path) continue;
+    existing?.remove();
     const thumb = document.createElement("img");
     thumb.className = "workspace-group-thumb";
+    thumb.dataset.sourcePath = path;
     thumb.src = convertFileSrc(path);
     thumb.alt = "";
     thumb.loading = "lazy";
@@ -206,7 +215,15 @@ function install(): boolean {
   installDragFallback(grid, list);
   installGroupOpenBehavior(list);
 
-  const observer = new MutationObserver(() => addGroupThumbnails());
+  let thumbnailRefreshQueued = false;
+  const observer = new MutationObserver(() => {
+    if (thumbnailRefreshQueued) return;
+    thumbnailRefreshQueued = true;
+    requestAnimationFrame(() => {
+      thumbnailRefreshQueued = false;
+      addGroupThumbnails();
+    });
+  });
   observer.observe(list, { childList: true, subtree: true });
   window.addEventListener("tihulu:engine-groups-synced", () => {
     window.setTimeout(() => {
