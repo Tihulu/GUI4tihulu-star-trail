@@ -27,6 +27,7 @@ async function bootFeatures(): Promise<void> {
   await loadFeature("ParameterInfo", () => import("./parameter-info"));
   await loadFeature("PhotoThumbnailManager", () => import("./photo-thumbnail-manager"));
   await loadFeature("StudioEditor", () => import("./studio-editor"));
+  await loadFeature("WorkspaceImportBridge", () => import("./workspace-import-bridge"));
   await loadFeature("WorkspaceParity", () => import("./workspace-parity"));
   await loadFeature("EngineGroupSync", () => import("./engine-group-sync"));
   await loadFeature("Readiness", () => import("./readiness"));
