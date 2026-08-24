@@ -1,0 +1,174 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+.parameter-info-dot {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid rgba(255,255,255,.22);
+  border-radius: 999px;
+  background: rgba(255,255,255,.06);
+  color: rgba(255,255,255,.8);
+  font: 700 11px/16px system-ui, sans-serif;
+  vertical-align: 1px;
+  cursor: pointer;
+}
+.parameter-info-dot:hover,
+.parameter-info-dot:focus-visible {
+  background: rgba(255,255,255,.12);
+  color: #fff;
+  outline: none;
+}
+.parameter-guide-strip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 18px;
+  padding: 14px 16px;
+  border: 1px solid rgba(124, 151, 255, .22);
+  border-radius: 14px;
+  background: rgba(82, 101, 175, .08);
+}
+.parameter-guide-strip > div {
+  display: grid;
+  gap: 3px;
+}
+.parameter-guide-strip strong {
+  font-size: 13px;
+}
+.parameter-guide-strip span {
+  font-size: 12px;
+  color: rgba(255,255,255,.62);
+}
+.parameter-guide-strip button {
+  flex: 0 0 auto;
+  border: 1px solid rgba(255,255,255,.18);
+  border-radius: 10px;
+  padding: 9px 12px;
+  background: rgba(255,255,255,.07);
+  color: #fff;
+  cursor: pointer;
+}
+.parameter-info-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(2, 4, 10, .72);
+  backdrop-filter: blur(10px);
+}
+.parameter-info-overlay.hidden {
+  display: none;
+}
+.parameter-info-dialog {
+  width: min(820px, 100%);
+  max-height: min(82vh, 900px);
+  overflow: hidden;
+  border: 1px solid rgba(255,255,255,.16);
+  border-radius: 20px;
+  background: #0b0f1b;
+  box-shadow: 0 24px 80px rgba(0,0,0,.45);
+}
+.parameter-info-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 20px 22px 16px;
+  border-bottom: 1px solid rgba(255,255,255,.08);
+}
+.parameter-info-head h2 {
+  margin: 2px 0 0;
+  font-size: 22px;
+}
+.parameter-info-kicker {
+  margin: 0;
+  color: rgba(255,255,255,.48);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .15em;
+}
+.parameter-info-close {
+  width: 34px;
+  height: 34px;
+  border: 1px solid rgba(255,255,255,.13);
+  border-radius: 10px;
+  background: rgba(255,255,255,.05);
+  color: #fff;
+  font-size: 21px;
+  cursor: pointer;
+}
+.parameter-info-body {
+  display: grid;
+  gap: 12px;
+  max-height: calc(82vh - 84px);
+  overflow: auto;
+  padding: 16px 18px 20px;
+}
+.parameter-info-card {
+  padding: 16px;
+  border: 1px solid rgba(255,255,255,.09);
+  border-radius: 14px;
+  background: rgba(255,255,255,.035);
+}
+.parameter-info-card.focused {
+  border-color: rgba(126, 151, 255, .35);
+  background: rgba(95, 116, 205, .08);
+}
+.parameter-info-card-title {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+}
+.parameter-info-card-title h3 {
+  margin: 0;
+  font-size: 15px;
+}
+.parameter-info-card-title span {
+  color: rgba(255,255,255,.54);
+  font-size: 11px;
+  white-space: nowrap;
+}
+.parameter-info-card > p {
+  margin: 8px 0 12px;
+  color: rgba(255,255,255,.72);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.parameter-info-card dl {
+  display: grid;
+  gap: 9px;
+  margin: 0;
+}
+.parameter-info-card dl > div {
+  display: grid;
+  grid-template-columns: 120px 1fr;
+  gap: 12px;
+}
+.parameter-info-card dt {
+  color: rgba(255,255,255,.48);
+  font-size: 11px;
+  font-weight: 700;
+}
+.parameter-info-card dd {
+  margin: 0;
+  color: rgba(255,255,255,.8);
+  font-size: 12px;
+  line-height: 1.45;
+}
+body.parameter-info-open {
+  overflow: hidden;
+}
+@media (max-width: 720px) {
+  .parameter-guide-strip,
+  .parameter-info-card-title {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .parameter-info-card dl > div {
+    grid-template-columns: 1fr;
+    gap: 3px;
+  }
+}
