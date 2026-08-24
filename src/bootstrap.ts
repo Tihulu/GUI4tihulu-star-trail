@@ -16,18 +16,22 @@ async function loadFeature(name: string, loader: Loader): Promise<void> {
   }
 }
 
-// Keep the core shell in main.ts. Everything below is isolated so one optional
-// workspace feature can never prevent branding, readiness or the other tools
-// from starting in a packaged Tauri build.
-await loadFeature("Branding", () => import("./branding"));
-await loadFeature("RenderOptions", () => import("./render-options"));
-await loadFeature("HardwareOptions", () => import("./hardware-options"));
-await loadFeature("ParameterInfo", () => import("./parameter-info"));
-await loadFeature("PhotoThumbnailManager", () => import("./photo-thumbnail-manager"));
-await loadFeature("StudioEditor", () => import("./studio-editor"));
-await loadFeature("WorkspaceParity", () => import("./workspace-parity"));
-await loadFeature("EngineGroupSync", () => import("./engine-group-sync"));
-await loadFeature("Readiness", () => import("./readiness"));
+async function bootFeatures(): Promise<void> {
+  // Keep the core shell in main.ts. Everything below is isolated so one optional
+  // workspace feature can never prevent branding, readiness or the other tools
+  // from starting in a packaged Tauri build.
+  await loadFeature("Branding", () => import("./branding"));
+  await loadFeature("RenderOptions", () => import("./render-options"));
+  await loadFeature("HardwareOptions", () => import("./hardware-options"));
+  await loadFeature("ParameterInfo", () => import("./parameter-info"));
+  await loadFeature("PhotoThumbnailManager", () => import("./photo-thumbnail-manager"));
+  await loadFeature("StudioEditor", () => import("./studio-editor"));
+  await loadFeature("WorkspaceParity", () => import("./workspace-parity"));
+  await loadFeature("EngineGroupSync", () => import("./engine-group-sync"));
+  await loadFeature("Readiness", () => import("./readiness"));
 
-document.documentElement.dataset.tihuluBootstrap = "ready";
-window.dispatchEvent(new CustomEvent("tihulu:bootstrap-ready"));
+  document.documentElement.dataset.tihuluBootstrap = "ready";
+  window.dispatchEvent(new CustomEvent("tihulu:bootstrap-ready"));
+}
+
+void bootFeatures();
