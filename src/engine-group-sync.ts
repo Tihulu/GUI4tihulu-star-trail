@@ -29,7 +29,7 @@ queueMicrotask(() => {
     if (!event.payload.success) return;
     const mode = lastStartedMode ?? document.querySelector<HTMLButtonElement>(".mode-tab.active")?.dataset.mode;
     if (mode !== "group" && mode !== "run") return;
-    window.setTimeout(() => void syncAfterSuccessfulJob(mode), 250);
+    window.setTimeout(() => void syncAfterSuccessfulJob(mode), 220);
   });
 });
 
@@ -41,32 +41,50 @@ function installSyncButton(): void {
   button.type = "button";
   button.className = "ghost-button compact-button";
   button.textContent = "Sync engine groups";
-  button.title = "Read manifest.json/group_* output and map engine groups back to the Photo Workspace";
+  button.title = "Read manifest.json/group_* output and map engine groups back to the original source frames";
   button.addEventListener("click", () => void syncEngineGroups(true, true));
   actions.insertBefore(button, actions.querySelector("#studioGroupUndo"));
 }
 
 async function syncAfterSuccessfulJob(mode: string): Promise<void> {
-  // Group-only is a curation workflow: take the user straight to the workspace
-  // and make the newly created groups visible. Full run syncs in place without
-  // forcing a workspace switch.
   if (mode === "group") {
     document.querySelector<HTMLButtonElement>('.section-tab[data-section="photos"]')?.click();
   }
   const ready = await ensureSourceWorkspaceLoaded();
   if (!ready) {
-    toast("Grouping finished, but the source workspace could not be loaded automatically.");
+    toast("Grouping finished, but the original source workspace could not be loaded automatically.");
     return;
   }
   await syncEngineGroups(mode === "group", false);
 }
 
+function processInputPath(): string {
+  const node = document.querySelector<HTMLElement>("#inputPath");
+  if (!node || node.classList.contains("empty")) return "";
+  return node.textContent?.trim() ?? "";
+}
+
+function workspaceSourcePath(): string {
+  const text = document.querySelector<HTMLElement>("#photoSourcePath")?.textContent?.trim() ?? "";
+  return text === "No folder selected" || text === "Scanning…" ? "" : text;
+}
+
 async function ensureSourceWorkspaceLoaded(): Promise<boolean> {
-  if (document.querySelector("#photoGrid .photo-tile[data-path]")) return true;
+  const processInput = processInputPath();
+  if (!processInput) return false;
+  const sourceMatches = normalizePath(workspaceSourcePath()) === normalizePath(processInput);
+  const hasTiles = Boolean(document.querySelector("#photoGrid .photo-tile[data-path]"));
+  if (hasTiles && sourceMatches) return true;
+
+  // Never sync against output/groups or another arbitrary workspace. Always
+  // restore the original Process input first, then map engine groups onto it.
   const scan = document.querySelector<HTMLButtonElement>("#scanFromProcess");
   if (!scan) return false;
   scan.click();
-  return waitFor(() => Boolean(document.querySelector("#photoGrid .photo-tile[data-path]")), 12000);
+  return waitFor(() => {
+    const matches = normalizePath(workspaceSourcePath()) === normalizePath(processInput);
+    return matches && Boolean(document.querySelector("#photoGrid .photo-tile[data-path]"));
+  }, 15000);
 }
 
 async function syncEngineGroups(showMessages: boolean, switchToWorkspace: boolean): Promise<void> {
@@ -82,17 +100,14 @@ async function syncEngineGroups(showMessages: boolean, switchToWorkspace: boolea
   const outputPath = output.textContent?.trim() ?? "";
   if (!outputPath) return;
 
-  if (!document.querySelector("#photoGrid .photo-tile[data-path]")) {
-    const ready = await ensureSourceWorkspaceLoaded();
-    if (!ready) {
-      if (showMessages) toast("Load the source photos in Photo Workspace first.");
-      return;
-    }
+  const ready = await ensureSourceWorkspaceLoaded();
+  if (!ready) {
+    if (showMessages) toast("Load the original source photos in Photo Workspace first.");
+    return;
   }
 
   const sourceTiles = Array.from(document.querySelectorAll<HTMLElement>("#photoGrid .photo-tile[data-path]"));
-  let groups = await groupsFromManifest(outputPath);
-  if (groups.length === 0) groups = await groupsFromMaterializedOutput(outputPath);
+  const groups = await loadEngineGroupsWithRetry(outputPath);
   if (groups.length === 0) {
     if (showMessages) toast("No engine groups were found in manifest.json or group_* folders.");
     return;
@@ -140,9 +155,26 @@ async function syncEngineGroups(showMessages: boolean, switchToWorkspace: boolea
 
   document.querySelector<HTMLButtonElement>("#studioShowAll")?.click();
   await nextFrame();
+  document.querySelector<HTMLButtonElement>("#studioGroupList .studio-group-card:not(.all-card) .group-open")?.click();
+  await nextFrame();
+  selectFirstVisibleFrame();
+
+  window.dispatchEvent(new CustomEvent("tihulu:engine-groups-synced", {
+    detail: { groups, groupsMatched, matched, source: processInput, output: outputPath },
+  }));
   if (showMessages || matched > 0) {
-    toast(`Synced ${groupsMatched}/${groups.length} engine group(s) · ${matched} source frame(s) matched.`);
+    toast(`Synced ${groupsMatched}/${groups.length} engine group(s) · ${matched} original source frame(s) matched.`);
   }
+}
+
+async function loadEngineGroupsWithRetry(outputPath: string): Promise<EngineGroup[]> {
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    let groups = await groupsFromManifest(outputPath);
+    if (groups.length === 0) groups = await groupsFromMaterializedOutput(outputPath);
+    if (groups.length > 0) return groups;
+    await delay(180 + attempt * 70);
+  }
+  return [];
 }
 
 async function groupsFromManifest(outputPath: string): Promise<EngineGroup[]> {
@@ -185,8 +217,6 @@ function normalizePath(value: string): string {
 
 function normalizeBase(value: string): string {
   let base = value.split(/[\\/]/).pop() ?? value;
-  // Workspace staging uses 000001_name; grouped materialization uses 0001_name.
-  // Strip both so engine output maps back to the original source tile.
   base = base.replace(/^\d{6}_/, "").replace(/^\d{4}_/, "");
   return base.toLocaleLowerCase();
 }
@@ -204,14 +234,13 @@ async function selectPaths(paths: string[]): Promise<void> {
 
 async function ensureGroupAndMove(name: string): Promise<void> {
   const cards = () => Array.from(document.querySelectorAll<HTMLElement>("#studioGroupList .studio-group-card[data-group-id]"));
-  let existing = cards().find((card) => card.querySelector("strong")?.textContent?.trim() === name);
+  const existing = cards().find((card) => card.querySelector("strong")?.textContent?.trim() === name);
   if (!existing) {
     const originalPrompt = window.prompt;
     window.prompt = () => name;
     try { document.querySelector<HTMLButtonElement>("#studioNewGroup")?.click(); }
     finally { window.prompt = originalPrompt; }
     await nextFrame();
-    existing = cards().find((card) => card.querySelector("strong")?.textContent?.trim() === name);
     return;
   }
   const groupId = existing.dataset.groupId;
@@ -221,6 +250,12 @@ async function ensureGroupAndMove(name: string): Promise<void> {
     moveTarget.dispatchEvent(new Event("change", { bubbles: true }));
     await nextFrame();
   }
+}
+
+function selectFirstVisibleFrame(): void {
+  const tile = Array.from(document.querySelectorAll<HTMLElement>("#photoGrid .photo-tile[data-path]"))
+    .find((item) => !item.classList.contains("studio-group-hidden"));
+  tile?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 }
 
 function waitFor(predicate: () => boolean, timeoutMs: number): Promise<boolean> {
@@ -235,11 +270,12 @@ function waitFor(predicate: () => boolean, timeoutMs: number): Promise<boolean> 
   });
 }
 
+function delay(ms: number): Promise<void> { return new Promise((resolve) => window.setTimeout(resolve, ms)); }
 function nextFrame(): Promise<void> { return new Promise((resolve) => requestAnimationFrame(() => resolve())); }
 function toast(message: string): void {
   let node = document.querySelector<HTMLDivElement>("#studioToast");
   if (!node) { node = document.createElement("div"); node.id = "studioToast"; node.className = "studio-toast"; document.body.append(node); }
   node.textContent = message;
   node.classList.add("show");
-  window.setTimeout(() => node?.classList.remove("show"), 3200);
+  window.setTimeout(() => node?.classList.remove("show"), 3600);
 }
