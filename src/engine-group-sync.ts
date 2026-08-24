@@ -160,7 +160,7 @@ async function syncEngineGroups(showMessages: boolean, switchToWorkspace: boolea
   selectFirstVisibleFrame();
 
   window.dispatchEvent(new CustomEvent("tihulu:engine-groups-synced", {
-    detail: { groups, groupsMatched, matched, source: processInput, output: outputPath },
+    detail: { groups, groupsMatched, matched, source: processInputPath(), output: outputPath },
   }));
   if (showMessages || matched > 0) {
     toast(`Synced ${groupsMatched}/${groups.length} engine group(s) · ${matched} original source frame(s) matched.`);
