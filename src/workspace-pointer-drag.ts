@@ -5,7 +5,7 @@ type DragCandidate = {
   startY: number;
   paths: string[];
   active: boolean;
-  nativeDropHandled: boolean;
+  moved: boolean;
   hoverCard: HTMLElement | null;
 };
 
@@ -71,6 +71,24 @@ async function moveToGroup(paths: string[], groupId: string): Promise<void> {
   card?.querySelector<HTMLButtonElement>(".group-open")?.click();
 }
 
+function finishMove(card: HTMLElement | null): void {
+  const current = candidate;
+  const groupId = card?.dataset.groupId;
+  if (!current || current.moved || !groupId || !current.paths.length) return;
+  current.moved = true;
+  const paths = [...current.paths];
+  clearHover();
+  document.documentElement.classList.remove("workspace-pointer-dragging");
+  suppressClickUntil = performance.now() + 300;
+  void moveToGroup(paths, groupId);
+}
+
+function resetCandidate(): void {
+  clearHover();
+  candidate = null;
+  document.documentElement.classList.remove("workspace-pointer-dragging");
+}
+
 function install(): boolean {
   const grid = qs<HTMLElement>("#photoGrid");
   const list = qs<HTMLElement>("#studioGroupList");
@@ -89,13 +107,63 @@ function install(): boolean {
       startY: event.clientY,
       paths: selected.includes(path) ? selected : [path],
       active: false,
-      nativeDropHandled: false,
+      moved: false,
       hoverCard: null,
     };
   }, true);
 
-  list.addEventListener("drop", () => {
-    if (candidate) candidate.nativeDropHandled = true;
+  // Native HTML5 drag can take over after pointerdown and suppress subsequent
+  // pointermove/pointerup events in WebKit. Keep the same candidate alive and track
+  // the destination through dragover so drop or dragend can complete the move.
+  grid.addEventListener("dragstart", (event) => {
+    const tile = (event.target as HTMLElement).closest<HTMLElement>(".photo-tile[data-path]");
+    const path = tile?.dataset.path;
+    if (!tile || !path) return;
+    const selected = selectedPaths();
+    if (!candidate) {
+      candidate = {
+        startX: 0,
+        startY: 0,
+        paths: selected.includes(path) ? selected : [path],
+        active: true,
+        moved: false,
+        hoverCard: null,
+      };
+    } else {
+      candidate.paths = selected.includes(path) ? selected : [path];
+      candidate.active = true;
+    }
+    document.documentElement.classList.add("workspace-pointer-dragging");
+  }, true);
+
+  list.addEventListener("dragover", (event) => {
+    if (!candidate?.paths.length) return;
+    const card = (event.target as HTMLElement).closest<HTMLElement>(".studio-group-card[data-group-id]");
+    if (!card) return;
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+    updateHover(card);
+  }, true);
+
+  // This module is loaded before workspace-parity, so it owns cross-group drops.
+  // Stop propagation to avoid duplicate history entries from the older parity handler.
+  list.addEventListener("drop", (event) => {
+    if (!candidate?.paths.length) return;
+    const card = (event.target as HTMLElement).closest<HTMLElement>(".studio-group-card[data-group-id]") ?? candidate.hoverCard;
+    if (!card) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    finishMove(card);
+    window.setTimeout(resetCandidate, 0);
+  }, true);
+
+  grid.addEventListener("dragend", () => {
+    const current = candidate;
+    if (!current) return;
+    // Some WebKit/X11 combinations emit dragover + dragend without a usable drop.
+    // The last hovered group is still an unambiguous destination, so complete it here.
+    if (!current.moved && current.active && current.hoverCard) finishMove(current.hoverCard);
+    window.setTimeout(resetCandidate, 0);
   }, true);
 
   window.addEventListener("pointermove", (event) => {
@@ -113,32 +181,23 @@ function install(): boolean {
     const current = candidate;
     if (!current) return;
     const card = cardAt(event.clientX, event.clientY) ?? current.hoverCard;
-    const groupId = card?.dataset.groupId;
-    clearHover();
-    candidate = null;
-    document.documentElement.classList.remove("workspace-pointer-dragging");
-
-    if (!current.active || current.nativeDropHandled || !groupId) return;
-    suppressClickUntil = performance.now() + 250;
-    event.preventDefault();
-    event.stopPropagation();
-    void moveToGroup(current.paths, groupId);
+    if (current.active && !current.moved && card) {
+      event.preventDefault();
+      event.stopPropagation();
+      finishMove(card);
+    }
+    window.setTimeout(resetCandidate, 0);
   }, true);
 
-  // A pointer fallback drag can otherwise be followed by the synthetic click that
-  // browsers emit after mouseup, which would collapse a multi-selection.
+  // A fallback drag can otherwise be followed by the synthetic click browsers emit
+  // after mouseup, which would collapse a multi-selection.
   grid.addEventListener("click", (event) => {
     if (performance.now() > suppressClickUntil) return;
     event.preventDefault();
     event.stopImmediatePropagation();
   }, true);
 
-  window.addEventListener("blur", () => {
-    clearHover();
-    candidate = null;
-    document.documentElement.classList.remove("workspace-pointer-dragging");
-  });
-
+  window.addEventListener("blur", resetCandidate);
   return true;
 }
 
