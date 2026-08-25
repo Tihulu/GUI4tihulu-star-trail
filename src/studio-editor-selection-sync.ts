@@ -21,7 +21,11 @@ function pulseEditorObserver(): void {
   const grid = qs<HTMLElement>("#photoGrid");
   if (!grid || !hasFrames()) return;
   pulseToken += 1;
-  grid.dataset.studioSelectionPulse = String(pulseToken);
+  // Studio Editor intentionally observes only class mutations on #photoGrid and its
+  // descendants. Toggling this inert class drives its real closure-local
+  // syncFromMainGrid() -> renderEditorForSelection() path without duplicating editor
+  // state outside the module.
+  grid.classList.toggle("studio-selection-sync-pulse", pulseToken % 2 === 1);
 }
 
 function schedulePulse(delayMs = 0): void {
