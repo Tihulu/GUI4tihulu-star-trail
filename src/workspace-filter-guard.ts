@@ -8,6 +8,7 @@ type StudioState = {
 };
 type LiveGroup = { id: string; name: string; paths: string[] };
 type LiveGroupsDetail = { source: string; groups: LiveGroup[] };
+type GroupMoveDetail = { paths: string[]; groupId: string | null };
 
 let applying = false;
 let queued = false;
@@ -166,6 +167,16 @@ function install(): boolean {
     for (const group of detail.groups) {
       for (const path of group.paths) liveAssignments.set(path, group.id);
     }
+    queueEnforce();
+    queueEnforce(80);
+    queueEnforce(220);
+  });
+
+  window.addEventListener("tihulu:workspace-group-move", (event) => {
+    const detail = (event as CustomEvent<GroupMoveDetail>).detail;
+    if (!detail || !Array.isArray(detail.paths)) return;
+    liveSource = sourceKey();
+    for (const path of detail.paths) liveAssignments.set(path, detail.groupId ?? null);
     queueEnforce();
     queueEnforce(80);
     queueEnforce(220);
