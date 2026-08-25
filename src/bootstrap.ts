@@ -30,6 +30,7 @@ async function bootFeatures(): Promise<void> {
   await loadFeature("WorkspaceImportBridge", () => import("./workspace-import-bridge"));
   await loadFeature("WorkspaceParity", () => import("./workspace-parity"));
   await loadFeature("WorkspaceFilterGuard", () => import("./workspace-filter-guard"));
+  await loadFeature("WorkspacePointerDrag", () => import("./workspace-pointer-drag"));
   await loadFeature("EngineGroupSync", () => import("./engine-group-sync"));
   await loadFeature("Readiness", () => import("./readiness"));
 
