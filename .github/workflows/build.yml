@@ -112,9 +112,18 @@ jobs:
           path: release-assets
           merge-multiple: true
 
-      - name: Create checksums
+      - name: Normalize release asset names and create checksums
+        shell: bash
         run: |
+          set -euo pipefail
           cd release-assets
+          while IFS= read -r -d '' file; do
+            base="${file#./}"
+            normalized="${base// /.}"
+            if [[ "$base" != "$normalized" ]]; then
+              mv -- "$base" "$normalized"
+            fi
+          done < <(find . -maxdepth 1 -type f -print0)
           sha256sum * > SHA256SUMS.txt
 
       - name: Publish versioned release
@@ -126,7 +135,16 @@ jobs:
           tag="v${version}"
 
           if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            echo "Release $tag already exists; bump package.json before publishing another release."
+            echo "Release $tag already exists; refreshing its checksum manifest from the uploaded release assets."
+            checksum_tmp="$(mktemp)"
+            gh api "repos/$GITHUB_REPOSITORY/releases/tags/$tag" \
+              --jq '.assets[] | select(.name != "SHA256SUMS.txt") | select(.digest != null and (.digest | startswith("sha256:"))) | "\(.digest | sub("^sha256:"; ""))  \(.name)"' \
+              | LC_ALL=C sort -k2 > "$checksum_tmp"
+            test -s "$checksum_tmp"
+            cp "$checksum_tmp" release-assets/SHA256SUMS.txt
+            gh release upload "$tag" release-assets/SHA256SUMS.txt \
+              --repo "$GITHUB_REPOSITORY" \
+              --clobber
             exit 0
           fi
 
