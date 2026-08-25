@@ -6,12 +6,20 @@ type StudioState = {
   assignments: Array<[string, string | null]>;
   edits: Array<[string, unknown]>;
 };
+type LiveGroup = { id: string; name: string; paths: string[] };
+type LiveGroupsDetail = { source: string; groups: LiveGroup[] };
 
 let applying = false;
 let queued = false;
+let liveSource = "";
+let liveAssignments = new Map<string, string | null>();
 
 function qs<T extends Element>(selector: string): T | null {
   return document.querySelector<T>(selector);
+}
+
+function normalizePath(value: string): string {
+  return value.replace(/\\/g, "/").replace(/\/+$/, "").toLocaleLowerCase();
 }
 
 function sourceKey(): string {
@@ -58,6 +66,26 @@ function updateFrameStatus(active: HTMLElement | null): void {
   status.textContent = `${name} · ${visible.length} frame${visible.length === 1 ? "" : "s"}${index >= 0 ? ` · frame ${index + 1}/${visible.length}` : ""}`;
 }
 
+function assignmentMap(groupId: string): Map<string, string | null> | null {
+  // Prefer Studio's persisted state once its 150 ms save has landed. Until then use
+  // the exact live IDs/path lists emitted by the import bridge. This removes the
+  // import-vs-grid-render race without making normal later group edits depend on it.
+  const state = readState();
+  if (state) {
+    const persisted = new Map(state.assignments);
+    if ([...persisted.values()].includes(groupId)) {
+      liveAssignments = new Map(persisted);
+      liveSource = sourceKey();
+      return persisted;
+    }
+  }
+
+  if (normalizePath(liveSource) === normalizePath(sourceKey()) && [...liveAssignments.values()].includes(groupId)) {
+    return liveAssignments;
+  }
+  return null;
+}
+
 function enforce(): void {
   if (applying) return;
   const all = tiles();
@@ -75,13 +103,9 @@ function enforce(): void {
     return;
   }
 
-  const state = readState();
-  if (!state) return;
-  const assignments = new Map(state.assignments);
   const groupId = active.dataset.groupId;
-  // During engine import the live editor may render a group card a few milliseconds
-  // before its debounced state save. Never erase the editor's filter in that window.
-  if (![...assignments.values()].includes(groupId)) return;
+  const assignments = assignmentMap(groupId);
+  if (!assignments) return;
 
   applying = true;
   try {
@@ -129,6 +153,23 @@ function install(): boolean {
       queueEnforce(180);
     }
   }, true);
+
+  window.addEventListener("tihulu:workspace-live-groups", (event) => {
+    const detail = (event as CustomEvent<LiveGroupsDetail>).detail;
+    if (!detail?.source || !Array.isArray(detail.groups)) return;
+    liveSource = detail.source;
+    liveAssignments = new Map();
+    for (const tile of tiles()) {
+      const path = tile.dataset.path;
+      if (path) liveAssignments.set(path, null);
+    }
+    for (const group of detail.groups) {
+      for (const path of group.paths) liveAssignments.set(path, group.id);
+    }
+    queueEnforce();
+    queueEnforce(80);
+    queueEnforce(220);
+  });
 
   window.addEventListener("tihulu:workspace-groups-imported", () => {
     queueEnforce();
