@@ -19,12 +19,14 @@ function activeMode(): Mode {
   return value === "group" || value === "trail" || value === "timelapse" ? value : "run";
 }
 
+function setTextIfChanged(node: HTMLElement | null, value: string): void {
+  if (node && node.textContent !== value) node.textContent = value;
+}
+
 function updateCommandLabels(): void {
   const action = ACTIONS[activeMode()];
-  const title = qs<HTMLElement>("#actionTitle");
-  const label = qs<HTMLElement>("#startLabel");
-  if (title) title.textContent = action;
-  if (label) label.textContent = action;
+  setTextIfChanged(qs<HTMLElement>("#actionTitle"), action);
+  setTextIfChanged(qs<HTMLElement>("#startLabel"), action);
 }
 
 function readinessReasons(): string[] {
@@ -55,13 +57,12 @@ function updateReadiness(): void {
   const status = qs<HTMLElement>("#startReadiness");
   if (!button || !status) return;
   const reasons = readinessReasons();
-  if (!button.disabled) {
-    status.className = "start-readiness ready";
-    status.textContent = `Ready · ${ACTIONS[activeMode()]}`;
-    return;
-  }
-  status.className = "start-readiness waiting";
-  status.textContent = reasons.length ? `Waiting · ${reasons.join(" · ")}` : "Waiting · another job may already be running";
+  const className = button.disabled ? "start-readiness waiting" : "start-readiness ready";
+  const text = button.disabled
+    ? (reasons.length ? `Waiting · ${reasons.join(" · ")}` : "Waiting · another job may already be running")
+    : `Ready · ${ACTIONS[activeMode()]}`;
+  if (status.className !== className) status.className = className;
+  setTextIfChanged(status, text);
 }
 
 function installerCommand(): string {
@@ -89,12 +90,15 @@ function openEngineUpdateDialog(): void {
     });
     document.body.append(overlay);
   }
-  qs<HTMLElement>("#engineUpdateCommand")!.textContent = installerCommand();
+  setTextIfChanged(qs<HTMLElement>("#engineUpdateCommand"), installerCommand());
   qs<HTMLButtonElement>("#copyEngineUpdate")?.addEventListener("click", async () => {
     try {
       await navigator.clipboard.writeText(installerCommand());
       const button = qs<HTMLButtonElement>("#copyEngineUpdate");
-      if (button) { button.textContent = "Copied"; window.setTimeout(() => { button.textContent = "Copy"; }, 1200); }
+      if (button) {
+        button.textContent = "Copied";
+        window.setTimeout(() => { if (button.textContent !== "Copy") button.textContent = "Copy"; }, 1200);
+      }
     } catch {
       // The command remains selectable even when clipboard permission is unavailable.
     }
@@ -136,8 +140,7 @@ function install(): boolean {
   if (consoleBody) {
     new MutationObserver(() => {
       if (consoleBody.textContent?.includes("too old for separate CPU/GPU/GPU+CPU controls")) {
-        const row = qs<HTMLElement>("#updateEngineHelp");
-        row?.classList.add("needs-update");
+        qs<HTMLElement>("#updateEngineHelp")?.classList.add("needs-update");
       }
     }).observe(consoleBody, { childList: true, subtree: true, characterData: true });
   }

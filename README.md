@@ -11,11 +11,11 @@
 
 The GUI uses the installed `tihulu` engine as the source of truth instead of duplicating the astrophotography pipeline. Processing stays local and original source photos are not modified.
 
-## v0.3.4 at a glance
+## v0.3.5 at a glance
 
 ### Process, readiness and independent hardware controls
 
-![v0.3.4 Process workspace](./docs/screenshots/v0.3.4-process.svg)
+![v0.3.5 Process workspace](./docs/screenshots/v0.3.5-process.png)
 
 Process exposes four quick workflows: **Full run**, **Group**, **Trail** and **Timelapse**. The primary action now explains why it is disabled instead of remaining silently grey: engine checking/missing, missing input/output, no included workspace frames, or another running job are surfaced directly below the button.
 
@@ -25,7 +25,7 @@ GPU/hybrid is capability-dependent: the installed OpenCV build must expose a usa
 
 ## Photo Workspace and engine-group sync
 
-![v0.3.4 Photo Workspace](./docs/screenshots/v0.3.4-workspace.svg)
+![v0.3.5 Photo Workspace](./docs/screenshots/v0.3.5-workspace.png)
 
 After a successful **Group** or **Full run**, the workspace restores the original Process input and maps `manifest.json` / `group_*` engine output back onto those original source frames. It no longer treats `output/groups` as the working source by accident.
 
@@ -48,13 +48,13 @@ Thumbnail work is viewport-aware and uses a decoded-size-aware LRU cache capped 
 
 ## Non-destructive Photo Editor
 
-![v0.3.4 Photo Editor](./docs/screenshots/v0.3.4-editor.svg)
+![v0.3.5 Photo Editor](./docs/screenshots/v0.3.5-editor.png)
 
 Per-frame edit state includes exposure, brightness, contrast, highlights, shadows, saturation, warmth, sharpness, rotation, crop aspect and JPEG export quality. The editor provides **Before**, **Undo**, **Redo**, **Reset**, Copy/Paste settings, and scoped application to selected frames, the current group or all frames. Edited JPEG export is available for the current frame, selection or current group. Originals remain untouched.
 
 ## Parameter Guide
 
-![v0.3.4 Parameter Guide](./docs/screenshots/v0.3.4-parameter-guide.svg)
+![v0.3.5 Parameter Guide](./docs/screenshots/v0.3.5-parameter-guide.png)
 
 Inline `i` help and the Parameter Guide explain grouping strictness, capture-time constraints, image/video output controls, hardware policies, thumbnail behavior and editor parameters without requiring users to know the CLI flags first.
 
@@ -95,7 +95,7 @@ Linux ARM64 GUI publishing is intentionally deferred until the upstream engine h
 
 ## Release validation
 
-v0.3.4 was validated through the cross-platform desktop workflow on **Windows x86_64, Linux x86_64 and macOS Universal** before merge. The versioned release is produced only after all three main-branch builds succeed.
+v0.3.5 was validated with the packaged Linux x86_64 AppImage using a real six-frame Group → Photo Workspace → Photo Editor workflow, including original-source group mapping, 3+3 group counts and frame-to-frame editor preview sync. The cross-platform desktop workflow must also pass on **Windows x86_64, Linux x86_64 and macOS Universal** before merge; the versioned release is produced only after all three main-branch builds succeed.
 
 ## License
 
