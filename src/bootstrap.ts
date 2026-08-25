@@ -28,9 +28,11 @@ async function bootFeatures(): Promise<void> {
   await loadFeature("PhotoThumbnailManager", () => import("./photo-thumbnail-manager"));
   await loadFeature("StudioEditor", () => import("./studio-editor"));
   await loadFeature("WorkspaceImportBridge", () => import("./workspace-import-bridge"));
+  // Register the unified native/pointer drop owner before the older parity helpers so
+  // one physical drop creates exactly one group-history operation.
+  await loadFeature("WorkspacePointerDrag", () => import("./workspace-pointer-drag"));
   await loadFeature("WorkspaceParity", () => import("./workspace-parity"));
   await loadFeature("WorkspaceFilterGuard", () => import("./workspace-filter-guard"));
-  await loadFeature("WorkspacePointerDrag", () => import("./workspace-pointer-drag"));
   await loadFeature("EngineGroupSync", () => import("./engine-group-sync"));
   await loadFeature("Readiness", () => import("./readiness"));
 
