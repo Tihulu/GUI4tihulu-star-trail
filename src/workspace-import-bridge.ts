@@ -2,6 +2,7 @@
 
 type ResolvedGroup = { name: string; paths: string[] };
 type GroupsResolvedDetail = { groups: ResolvedGroup[]; source: string; output: string };
+type LiveGroup = { id: string; name: string; paths: string[] };
 
 let importing = false;
 
@@ -21,8 +22,8 @@ function tiles(): HTMLElement[] {
   return Array.from(document.querySelectorAll<HTMLElement>("#photoGrid .photo-tile[data-path]"));
 }
 
-function cardCount(): number {
-  return document.querySelectorAll("#studioGroupList .studio-group-card[data-group-id]").length;
+function groupCards(): HTMLElement[] {
+  return Array.from(document.querySelectorAll<HTMLElement>("#studioGroupList .studio-group-card[data-group-id]"));
 }
 
 function clearTileSelection(): void {
@@ -58,14 +59,14 @@ async function clearExistingGroups(): Promise<void> {
   }
 }
 
-async function createEditorGroup(name: string, paths: string[]): Promise<boolean> {
+async function createEditorGroup(name: string, paths: string[]): Promise<string | null> {
   qs<HTMLButtonElement>("#studioShowAll")?.click();
   await delay(0);
   clearTileSelection();
   const matched = selectTilePaths(paths);
-  if (matched === 0) return false;
+  if (matched === 0) return null;
 
-  const before = cardCount();
+  const beforeIds = new Set(groupCards().map((card) => card.dataset.groupId).filter((id): id is string => Boolean(id)));
   const originalPrompt = window.prompt;
   window.prompt = () => name;
   try {
@@ -74,7 +75,12 @@ async function createEditorGroup(name: string, paths: string[]): Promise<boolean
     window.prompt = originalPrompt;
   }
   await delay(0);
-  return cardCount() === before + 1;
+
+  const created = groupCards().find((card) => {
+    const id = card.dataset.groupId;
+    return Boolean(id && !beforeIds.has(id));
+  });
+  return created?.dataset.groupId ?? null;
 }
 
 async function selectFirstGroupFrame(): Promise<void> {
@@ -95,6 +101,7 @@ async function selectFirstGroupFrame(): Promise<void> {
 async function importResolvedGroups(detail: GroupsResolvedDetail): Promise<void> {
   if (importing) return;
   importing = true;
+  let importedSuccessfully = false;
   try {
     const sourceLabel = qs<HTMLElement>("#photoSourcePath")?.textContent?.trim() ?? "";
     if (!detail?.source || normalizePath(sourceLabel) !== normalizePath(detail.source)) return;
@@ -110,27 +117,38 @@ async function importResolvedGroups(detail: GroupsResolvedDetail): Promise<void>
     await clearExistingGroups();
     clearTileSelection();
 
-    let importedGroups = 0;
+    const liveGroups: LiveGroup[] = [];
     let importedFrames = 0;
     for (const group of resolved) {
-      if (await createEditorGroup(group.name, group.paths)) {
-        importedGroups += 1;
+      const id = await createEditorGroup(group.name, group.paths);
+      if (id) {
+        liveGroups.push({ id, name: group.name, paths: [...group.paths] });
         importedFrames += group.paths.length;
       }
     }
 
     clearTileSelection();
-    if (importedGroups !== resolved.length || importedFrames === 0) {
-      console.error(`[Tihulu Studio] imported ${importedGroups}/${resolved.length} engine groups into live Studio state`);
+    if (liveGroups.length !== resolved.length || importedFrames === 0) {
+      console.error(`[Tihulu Studio] imported ${liveGroups.length}/${resolved.length} engine groups into live Studio state`);
       return;
     }
 
+    // Publish the exact IDs created by Studio Editor before any debounced localStorage
+    // save. Consumers such as the filter guard can therefore preserve the active group
+    // immediately even if main.ts re-renders the photo grid in the same frame.
+    window.dispatchEvent(new CustomEvent("tihulu:workspace-live-groups", {
+      detail: { source: detail.source, groups: liveGroups },
+    }));
+
     await selectFirstGroupFrame();
+    importedSuccessfully = true;
     window.dispatchEvent(new CustomEvent("tihulu:workspace-groups-imported", {
-      detail: { groups: importedGroups, frames: importedFrames, source: detail.source },
+      detail: { groups: liveGroups.length, frames: importedFrames, source: detail.source },
     }));
   } finally {
-    clearTileSelection();
+    // Temporary class-only selection is only cleanup for failed/partial imports. On a
+    // successful import keep the first real frame selected so Previous/Next starts at 1/N.
+    if (!importedSuccessfully) clearTileSelection();
     importing = false;
   }
 }
