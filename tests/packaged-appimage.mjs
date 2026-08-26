@@ -25,7 +25,7 @@ const previewSource = resolve(inputDir, "acceptance-preview.png");
 writeFileSync(
   previewSource,
   Buffer.from(
-    "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAFElEQVR4nGP4z8DAwMDAxMDAwMAAAAwBAf8B9QAAAABJRU5ErkJggg==",
+    "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAFklEQVR4nGPkEpFjYGBgYmBgYGBgAAAC5gBAXKUgWwAAAABJRU5ErkJggg==",
     "base64",
   ),
 );
@@ -94,7 +94,7 @@ try {
   assert.equal(thumbnailResult?.ok, true, thumbnailResult?.error || "get_thumbnail failed");
   assert.match(
     String(thumbnailResult.value?.dataUrl || ""),
-    /^data:image\/jpeg;base64,/, 
+    /^data:image\/jpeg;base64,/,
     "packaged thumbnail IPC did not return a bounded JPEG data URL",
   );
   assert.ok(
