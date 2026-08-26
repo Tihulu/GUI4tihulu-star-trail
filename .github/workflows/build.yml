@@ -208,7 +208,7 @@ jobs:
           export LIBGL_ALWAYS_SOFTWARE=1
           echo "Starting packaged AppImage acceptance with a 180-second hard watchdog"
           timeout --verbose --signal=TERM --kill-after=10s 180s \
-            xvfb-run -a node tests/packaged-appimage.mjs
+            xvfb-run -a node tests/packaged-appimage-entry.mjs
 
       - name: Upload acceptance screenshot on failure
         if: failure()
