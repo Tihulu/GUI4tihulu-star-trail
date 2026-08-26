@@ -131,14 +131,17 @@ struct JobFinished {
     code: Option<i32>,
 }
 
+// Keep this list aligned with tihulu_star_trail.images.SUPPORTED_EXTENSIONS.
 const IMAGE_EXTENSIONS: &[&str] = &[
-    "jpg", "jpeg", "png", "tif", "tiff", "webp", "bmp", "gif", "avif", "cr2", "cr3",
-    "nef", "arw", "dng", "orf", "rw2", "raf", "pef", "srw", "x3f",
+    "jpg", "jpeg", "png", "tif", "tiff", "bmp", "webp", "3fr", "arw", "cr2", "cr3",
+    "dcr", "dng", "erf", "kdc", "mef", "mos", "mrw", "nef", "nrw", "orf", "pef", "raf",
+    "raw", "rwl", "rw2", "srw", "x3f",
 ];
 const RAW_EXTENSIONS: &[&str] = &[
-    "cr2", "cr3", "nef", "arw", "dng", "orf", "rw2", "raf", "pef", "srw", "x3f",
+    "3fr", "arw", "cr2", "cr3", "dcr", "dng", "erf", "kdc", "mef", "mos", "mrw", "nef",
+    "nrw", "orf", "pef", "raf", "raw", "rwl", "rw2", "srw", "x3f",
 ];
-const BROWSER_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "webp", "bmp", "gif", "avif"];
+const BROWSER_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "webp", "bmp"];
 const HARDWARE_MODES: &[&str] = &["auto", "cpu", "gpu", "hybrid"];
 
 fn candidate_names() -> &'static [&'static str] {
@@ -152,25 +155,22 @@ fn candidate_names() -> &'static [&'static str] {
     }
 }
 
-fn known_locations() -> Vec<PathBuf> {
+fn preferred_locations() -> Vec<PathBuf> {
     let mut paths = Vec::new();
     #[cfg(not(windows))]
     {
         if let Some(home) = env::var_os("HOME") {
             let home = PathBuf::from(home);
-            paths.push(home.join(".local/bin/tihulu"));
+            // Match the installer: GUI-managed engine first, then current-user launcher.
             paths.push(home.join(".local/share/gui4tihulu-star-trail/cli-venv/bin/tihulu"));
+            paths.push(home.join(".local/bin/tihulu"));
         }
-        paths.push(PathBuf::from("/usr/local/bin/tihulu"));
-        paths.push(PathBuf::from("/opt/homebrew/bin/tihulu"));
-        paths.push(PathBuf::from("/usr/bin/tihulu"));
     }
     #[cfg(windows)]
     {
         if let Some(local_app_data) = env::var_os("LOCALAPPDATA") {
-            let local = PathBuf::from(local_app_data);
             paths.push(
-                local
+                PathBuf::from(local_app_data)
                     .join("GUI4tihulu-star-trail")
                     .join("cli")
                     .join(".venv")
@@ -178,6 +178,17 @@ fn known_locations() -> Vec<PathBuf> {
                     .join("tihulu.exe"),
             );
         }
+    }
+    paths
+}
+
+fn fallback_locations() -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    #[cfg(not(windows))]
+    {
+        paths.push(PathBuf::from("/usr/local/bin/tihulu"));
+        paths.push(PathBuf::from("/opt/homebrew/bin/tihulu"));
+        paths.push(PathBuf::from("/usr/bin/tihulu"));
     }
     paths
 }
@@ -203,22 +214,29 @@ fn resolve_executable(custom: Option<&str>) -> Result<PathBuf, String> {
         }
         return Err(format!("Custom tihulu executable does not exist: {value}"));
     }
-    if let Some(path) = executable_from_path() {
-        return Ok(path);
-    }
-    for path in known_locations() {
+    // Desktop launchers and direct AppImage launches can inherit different PATHs.
+    // Prefer the user-managed engine that our installer owns before consulting PATH.
+    for path in preferred_locations() {
         if path.is_file() {
             return Ok(path);
         }
     }
-    Err("tihulu was not found on PATH or in a standard Tihulu install location".into())
+    if let Some(path) = executable_from_path() {
+        return Ok(path);
+    }
+    for path in fallback_locations() {
+        if path.is_file() {
+            return Ok(path);
+        }
+    }
+    Err("tihulu was not found in a current-user install, on PATH, or in a standard system location".into())
 }
 
 fn hide_console(command: &mut Command) {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
-        command.creation_flags(windows_sys::Win32::System::Threading::CREATE_NO_WINDOW);
+        command.creation_flags(windows_sys::Win32_System_Threading::CREATE_NO_WINDOW);
     }
     #[cfg(not(windows))]
     let _ = command;
@@ -382,26 +400,39 @@ fn validate_request(request: &JobRequest) -> Result<(), String> {
     if request.output.trim().is_empty() {
         return Err("Output path is required".into());
     }
-    if !(0.0..=1.0).contains(&request.threshold) {
-        return Err("Threshold must be between 0 and 1".into());
+
+    let uses_grouping = matches!(request.command.as_str(), "run" | "group");
+    let uses_render = matches!(request.command.as_str(), "run" | "trail" | "timelapse");
+    let uses_jpeg = matches!(request.command.as_str(), "run" | "trail");
+    let uses_video = request.command == "timelapse" || (request.command == "run" && request.timelapse);
+
+    if uses_grouping {
+        if !(0.0..=1.0).contains(&request.threshold) {
+            return Err("Threshold must be between 0 and 1".into());
+        }
+        if request.min_matches < 4 || request.max_side < 128 || request.nfeatures < 100 {
+            return Err("Grouping settings are outside the supported range".into());
+        }
+        if request.time_window_minutes < 0.0 || !request.time_window_minutes.is_finite() {
+            return Err("Time window must be a finite, non-negative number".into());
+        }
+        if !matches!(request.link_mode.as_str(), "copy" | "symlink" | "hardlink" | "none") {
+            return Err("Unsupported grouped-output link mode".into());
+        }
     }
-    if request.min_matches < 4 || request.max_side < 128 || request.nfeatures < 100 {
-        return Err("Grouping settings are outside the supported range".into());
+    if uses_render && request.min_frames < 2 {
+        return Err("Minimum frames must be at least 2".into());
     }
-    if request.time_window_minutes < 0.0 || !request.time_window_minutes.is_finite() {
-        return Err("Time window must be a finite, non-negative number".into());
+    if uses_jpeg && !(1..=100).contains(&request.jpeg_quality) {
+        return Err("JPEG quality must be between 1 and 100".into());
     }
-    if request.min_frames < 2 || !(1..=100).contains(&request.jpeg_quality) {
-        return Err("Render settings are outside the supported range".into());
-    }
-    if request.fps <= 0.0 || !request.fps.is_finite() {
-        return Err("FPS must be a finite number greater than zero".into());
-    }
-    if request.codec.chars().count() != 4 || !request.codec.is_ascii() {
-        return Err("Codec must contain exactly four ASCII characters".into());
-    }
-    if !matches!(request.link_mode.as_str(), "copy" | "symlink" | "hardlink" | "none") {
-        return Err("Unsupported grouped-output link mode".into());
+    if uses_video {
+        if request.fps <= 0.0 || !request.fps.is_finite() {
+            return Err("FPS must be a finite number greater than zero".into());
+        }
+        if request.codec.chars().count() != 4 || !request.codec.is_ascii() {
+            return Err("Codec must contain exactly four ASCII characters".into());
+        }
     }
     Ok(())
 }
@@ -465,8 +496,8 @@ fn build_args(request: &JobRequest, input: &Path) -> Vec<String> {
             render_args(request, &mut args, true);
             if request.timelapse {
                 args.push("--timelapse".into());
+                video_args(request, &mut args);
             }
-            video_args(request, &mut args);
         }
         "group" => {
             grouping_args(request, &mut args);
@@ -535,7 +566,7 @@ fn append_hardware_args(
     if !supported {
         if requested.iter().any(|(_, value)| *value != "auto") {
             return Err(
-                "The installed tihulu engine is too old for separate CPU/GPU/GPU+CPU controls. Update tihulu-star-trail, then recheck the engine.".into(),
+                "The detected tihulu executable does not expose the required hardware-policy controls. Recheck the engine path or update tihulu-star-trail; the requested mode was not downgraded to Auto.".into(),
             );
         }
         return Ok(());
@@ -881,9 +912,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn supported_extensions_include_raw_and_common_images() {
+    fn supported_extensions_match_engine_formats() {
         assert!(is_supported_image(Path::new("sky.JPG")));
         assert!(is_supported_image(Path::new("sky.CR3")));
+        assert!(is_supported_image(Path::new("sky.3FR")));
+        assert!(is_supported_image(Path::new("sky.RAW")));
+        assert!(!is_supported_image(Path::new("animation.gif")));
+        assert!(!is_supported_image(Path::new("frame.avif")));
         assert!(!is_supported_image(Path::new("notes.txt")));
     }
 
