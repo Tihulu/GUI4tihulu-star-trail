@@ -4,6 +4,7 @@ set -eu
 
 GUI_REPO="Tihulu/GUI4tihulu-star-trail"
 ENGINE_REPO="Tihulu/tihulu-star-trail"
+APP_ID="io.github.tihulu.gui4startrail"
 OS="$(uname -s)"
 ARCH="$(uname -m)"
 
@@ -40,12 +41,21 @@ find_tihulu() {
   return 1
 }
 
-engine_supports_policies() {
+engine_supports_runtime() {
   [ -x "$1" ] || return 1
   HELP="$($1 run --help 2>&1 || true)"
   printf '%s' "$HELP" | grep -q -- '--group-hardware' || return 1
   printf '%s' "$HELP" | grep -q -- '--trail-hardware' || return 1
   printf '%s' "$HELP" | grep -q -- '--timelapse-hardware' || return 1
+  ENGINE_DIR="$(dirname "$1")"
+  [ -x "$ENGINE_DIR/tihulu-hardware" ] || return 1
+  [ -x "$ENGINE_DIR/tihulu-thumbnail" ] || return 1
+}
+
+engine_gpu_ready() {
+  ENGINE_DIR="$(dirname "$1")"
+  [ -x "$ENGINE_DIR/tihulu-hardware" ] || return 1
+  "$ENGINE_DIR/tihulu-hardware" --mode gpu >/dev/null 2>&1
 }
 
 install_engine_fallback() {
@@ -58,11 +68,34 @@ install_engine_fallback() {
   VENV="$ROOT/cli-venv"
   mkdir -p "$ROOT" "$HOME/.local/bin"
   if [ ! -x "$VENV/bin/python" ]; then
-    "$PYTHON" -m venv "$VENV" || fail "Could not create a Python virtual environment. Install python3-venv and rerun."
+    if ! "$PYTHON" -m venv "$VENV"; then
+      if [ "$OS" = "Linux" ] && command -v apt-get >/dev/null 2>&1 && command -v sudo >/dev/null 2>&1; then
+        sudo apt-get update
+        sudo apt-get install -y python3-venv
+        "$PYTHON" -m venv "$VENV" || fail "Could not create the GUI-managed Python virtual environment."
+      else
+        fail "Could not create a Python virtual environment. Install python3-venv and rerun."
+      fi
+    fi
   fi
   "$VENV/bin/python" -m pip install --upgrade pip setuptools wheel
   "$VENV/bin/python" -m pip install --upgrade --force-reinstall "tihulu-star-trail[video] @ https://github.com/$ENGINE_REPO/archive/refs/heads/main.zip"
+
+  if command -v nvidia-smi >/dev/null 2>&1; then
+    CUDA_MAJOR="$(nvidia-smi 2>/dev/null | sed -n 's/.*CUDA Version: \([0-9][0-9]*\).*/\1/p' | head -n 1)"
+    "$VENV/bin/python" -m pip uninstall -y cupy cupy-cuda11x cupy-cuda12x cupy-cuda13x >/dev/null 2>&1 || true
+    if [ "${CUDA_MAJOR:-0}" -ge 13 ]; then
+      say "Installing NVIDIA CUDA 13 runtime for tihulu-star-trail"
+      "$VENV/bin/python" -m pip install --upgrade "cupy-cuda13x[ctk]>=14,<15"
+    else
+      say "Installing NVIDIA CUDA 12 runtime for tihulu-star-trail"
+      "$VENV/bin/python" -m pip install --upgrade "cupy-cuda12x[ctk]>=14,<15"
+    fi
+  fi
+
   ln -sf "$VENV/bin/tihulu" "$HOME/.local/bin/tihulu"
+  ln -sf "$VENV/bin/tihulu-hardware" "$HOME/.local/bin/tihulu-hardware"
+  ln -sf "$VENV/bin/tihulu-thumbnail" "$HOME/.local/bin/tihulu-thumbnail"
 }
 
 install_current_engine() {
@@ -71,11 +104,9 @@ install_current_engine() {
       curl -fsSL "https://raw.githubusercontent.com/$ENGINE_REPO/main/macos/install.sh" | sh
       ;;
     Linux)
-      if [ -f /etc/debian_version ] && command -v apt-get >/dev/null 2>&1; then
-        curl -fsSL "https://raw.githubusercontent.com/$ENGINE_REPO/main/scripts/install-debian.sh" | sh
-      else
-        install_engine_fallback
-      fi
+      # Keep the GUI engine deterministic. System python3-opencv / PyPI OpenCV wheels
+      # are commonly CPU-only for CUDA; this venv can carry the CuPy CUDA runtime.
+      install_engine_fallback
       ;;
   esac
 }
@@ -84,17 +115,22 @@ ENGINE_PATH="$(find_tihulu 2>/dev/null || true)"
 if [ -z "$ENGINE_PATH" ]; then
   say "tihulu-star-trail is not installed — installing the current engine"
   install_current_engine
-elif engine_supports_policies "$ENGINE_PATH"; then
+elif engine_supports_runtime "$ENGINE_PATH" && { ! command -v nvidia-smi >/dev/null 2>&1 || engine_gpu_ready "$ENGINE_PATH"; }; then
   say "Found compatible tihulu-star-trail: $ENGINE_PATH"
 else
-  say "Installed tihulu engine is older than this GUI — updating it"
+  say "Installed tihulu engine is missing the required runtime or GPU backend — updating it"
   install_current_engine
 fi
 
 ENGINE_PATH="$(find_tihulu 2>/dev/null || true)"
 [ -n "$ENGINE_PATH" ] || fail "tihulu-star-trail installation finished but the tihulu launcher was not found."
 "$ENGINE_PATH" --help >/dev/null 2>&1 || fail "The tihulu launcher exists but could not be executed."
-engine_supports_policies "$ENGINE_PATH" || fail "The engine was installed but is still missing the required group/trail/timelapse hardware controls."
+engine_supports_runtime "$ENGINE_PATH" || fail "The engine was installed but is missing the required hardware probe or RAW thumbnail runtime."
+GPU_VERIFIED=0
+if command -v nvidia-smi >/dev/null 2>&1; then
+  engine_gpu_ready "$ENGINE_PATH" || fail "NVIDIA is present, but the tihulu CUDA runtime probe failed. GPU mode was not accepted as ready."
+  GPU_VERIFIED=1
+fi
 
 PYTHON=""
 if command -v python3 >/dev/null 2>&1; then PYTHON="$(command -v python3)"; fi
@@ -156,7 +192,7 @@ case "$OS" in
     mkdir -p "$HOME/.local/bin" "$HOME/.local/share/applications"
     ICON_DIR="$HOME/.local/share/icons/hicolor/scalable/apps"
     mkdir -p "$ICON_DIR"
-    ICON_PATH="$ICON_DIR/tihulu-star-trail-studio.svg"
+    ICON_PATH="$ICON_DIR/$APP_ID.svg"
     curl -fsSL "https://raw.githubusercontent.com/$GUI_REPO/main/app-icon.svg" -o "$ICON_PATH"
 
     APPIMAGE="$HOME/.local/bin/tihulu-star-trail-studio"
@@ -182,13 +218,17 @@ exec "$APPIMAGE" "\$@"
 EOF
     chmod +x "$LAUNCHER"
 
-    cat > "$HOME/.local/share/applications/tihulu-star-trail-studio.desktop" <<EOF
+    rm -f "$HOME/.local/share/applications/tihulu-star-trail-studio.desktop"
+    DESKTOP_FILE="$HOME/.local/share/applications/$APP_ID.desktop"
+    cat > "$DESKTOP_FILE" <<EOF
 [Desktop Entry]
 Type=Application
 Name=Tihulu Star Trail Studio
 Comment=Modern GUI for tihulu-star-trail
 Exec=$LAUNCHER
 Icon=$ICON_PATH
+StartupWMClass=$APP_ID
+X-GNOME-WMClass=$APP_ID
 Terminal=false
 Categories=Graphics;Photography;
 StartupNotify=true
@@ -200,5 +240,8 @@ EOF
 esac
 
 printf '\nEngine: %s\n' "$ENGINE_PATH"
-printf 'Engine hardware controls: Auto / CPU / GPU / GPU+CPU ready\n'
+printf 'Engine hardware controls installed: Auto / CPU / GPU / GPU+CPU\n'
+if [ "$GPU_VERIFIED" -eq 1 ]; then
+  printf 'NVIDIA GPU runtime: verified\n'
+fi
 printf 'License: GNU AGPL v3 (AGPL-3.0-only)\n'

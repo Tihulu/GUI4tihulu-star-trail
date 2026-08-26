@@ -40,3 +40,8 @@
   .workspace-parity-bar { align-items: flex-start; flex-direction: column; }
   .workspace-parity-actions { justify-content: flex-start; }
 }
+
+/* v0.3.10: keep group cards geometrically stable while thumbnails resolve. */
+#studioGroupList .studio-group-card[data-group-id] { padding-left: 68px; min-height: 58px; }
+#studioGroupList .studio-group-card[data-group-id] .workspace-group-thumb { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); }
+#photoGrid .thumb-wrap.thumbnail-error::after { content: "preview unavailable"; position: absolute; inset: 0; display: grid; place-items: center; color: #687187; font-size: 9px; letter-spacing: .04em; background: radial-gradient(circle at 50% 35%, rgba(155,140,255,.10), transparent 62%), #060914; }

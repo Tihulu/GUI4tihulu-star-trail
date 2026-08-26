@@ -486,5 +486,29 @@ function setupStudioEditor(
 
   document.addEventListener("keydown", (event) => { const target = event.target as HTMLElement | null; if (target?.matches("input, textarea, select")) return; if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "z") { event.preventDefault(); if (event.shiftKey) applyEditHistory(editHistoryIndex + 1); else applyEditHistory(editHistoryIndex - 1); } if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "y") { event.preventDefault(); applyEditHistory(editHistoryIndex + 1); } });
 
-  const observer = new MutationObserver(() => queueMicrotask(syncFromMainGrid)); observer.observe(photoGrid, { childList: true, subtree: true, attributes: true, attributeFilter: ["class"] }); queueMicrotask(syncFromMainGrid);
+  let structureSyncQueued = false;
+  let selectionSyncQueued = false;
+  function queueStructureSync(): void {
+    if (structureSyncQueued) return;
+    structureSyncQueued = true;
+    queueMicrotask(() => {
+      structureSyncQueued = false;
+      syncFromMainGrid();
+    });
+  }
+  function queueSelectionSync(): void {
+    if (selectionSyncQueued || structureSyncQueued) return;
+    selectionSyncQueued = true;
+    queueMicrotask(() => {
+      selectionSyncQueued = false;
+      renderEditorForSelection();
+    });
+  }
+  const observer = new MutationObserver((mutations) => {
+    const structureChanged = mutations.some((mutation) => mutation.type === "childList");
+    if (structureChanged) queueStructureSync();
+    else if (mutations.some((mutation) => mutation.type === "attributes")) queueSelectionSync();
+  });
+  observer.observe(photoGrid, { childList: true, subtree: true, attributes: true, attributeFilter: ["class"] });
+  queueStructureSync();
 }
