@@ -94,40 +94,14 @@ function forceAllFramesExcluded(): void {
   allIncluded.click();
 }
 
-function installGroupQuickActions(): void {
-  const footer = qs<HTMLElement>(".studio-group-footer");
+function installExactGroupSelectionGuard(): void {
   const processButton = qs<HTMLButtonElement>("#studioUseGroup");
-  if (!footer || !processButton || qs("#studioTrailGroup")) return;
-
+  if (!processButton || processButton.dataset.exactGroupGuardReady === "1") return;
+  processButton.dataset.exactGroupGuardReady = "1";
+  // Both the existing parity-bar Trail/Timelapse buttons and the normal Process
+  // button funnel through studioUseGroup. Clear outside includes before its original
+  // handler repopulates the active group, so old partial selections cannot leak in.
   processButton.addEventListener("click", forceAllFramesExcluded, { capture: true });
-
-  const actions = document.createElement("div");
-  actions.className = "studio-group-quick-actions";
-  const trail = document.createElement("button");
-  trail.type = "button";
-  trail.id = "studioTrailGroup";
-  trail.className = "secondary-button compact-button";
-  trail.textContent = "Trail this group";
-  const timelapse = document.createElement("button");
-  timelapse.type = "button";
-  timelapse.id = "studioTimelapseGroup";
-  timelapse.className = "secondary-button compact-button";
-  timelapse.textContent = "Timelapse this group";
-
-  processButton.remove();
-  actions.append(trail, timelapse, processButton);
-  footer.append(actions);
-
-  const useGroup = (mode: QuickMode): void => {
-    if (!hasActiveGroup()) {
-      processButton.click();
-      return;
-    }
-    qs<HTMLButtonElement>(`.mode-tab[data-mode="${mode}"]`)?.click();
-    processButton.click();
-  };
-  trail.addEventListener("click", () => useGroup("trail"));
-  timelapse.addEventListener("click", () => useGroup("timelapse"));
 }
 
 function linkModeDescription(mode: LinkMode): string {
@@ -207,9 +181,9 @@ function install(): boolean {
   installOutputNames();
   installWorkspaceQuickActions();
   installLinkModeHelp();
-  installGroupQuickActions();
+  installExactGroupSelectionGuard();
   installModeRequestGuard();
-  return Boolean(qs("#trailOutputName") && qs("#timelapseOutputName") && qs("#workspaceTrail") && qs("#studioTrailGroup"));
+  return Boolean(qs("#trailOutputName") && qs("#timelapseOutputName") && qs("#workspaceTrail") && qs("#studioUseGroup"));
 }
 
 function start(): void {
