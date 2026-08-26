@@ -1,8 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 const read = (path) => readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
 
+test("Linux installer parses as POSIX shell", () => { execFileSync("sh", ["-n", "scripts/install.sh"], { cwd: new URL("../", import.meta.url) }); });
 test("JobRequest owns exact hardware selections", () => { const main = read("src/main.ts"); const rust = read("src-tauri/src/lib.rs"); assert.match(main, /groupHardware: hardwareMode\("groupHardwarePolicy"\)/); assert.match(main, /trailHardware: hardwareMode\("trailHardwarePolicy"\)/); assert.match(main, /timelapseHardware: hardwareMode\("timelapseHardwarePolicy"\)/); assert.doesNotMatch(rust, /HARDWARE_POLICIES|set_hardware_policies/); assert.match(rust, /request\.group_hardware/); });
 test("launch barrier workaround is gone", () => { assert.doesNotMatch(read("src/bootstrap.ts"), /LaunchStateSync/); });
 test("workspace images never receive full source URLs", () => { const main = read("src/main.ts"); const thumbs = read("src/photo-thumbnail-manager.ts"); assert.doesNotMatch(main, /convertFileSrc\(photo\.path\)/); assert.match(main, /data-thumb-path/); assert.match(thumbs, /invoke<ThumbnailResult>\("get_thumbnail"/); assert.doesNotMatch(thumbs, /createImageBitmap|ImageDecoder|fetch\(source/); });
