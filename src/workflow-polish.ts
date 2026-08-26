@@ -24,34 +24,30 @@ function validOutputStem(value: string): boolean {
 }
 
 function installOutputNames(): void {
-  const renderSection = Array.from(document.querySelectorAll<HTMLElement>(".settings-section"))
-    .find((section) => section.querySelector("#jpegQuality"));
-  const timelapseSection = Array.from(document.querySelectorAll<HTMLElement>(".settings-section"))
-    .find((section) => section.querySelector("#fps"));
+  // render-options.ts replaces the old legacy sections with these visible cards.
+  // Prefer those cards so custom names never end up inside hidden legacy markup.
+  const trailCard = qs<HTMLElement>("#trailOptionsCard");
+  const timelapseCard = qs<HTMLElement>("#timelapseOptionsCard");
 
-  if (renderSection && !qs("#trailOutputName")) {
+  if (trailCard && !qs("#trailOutputName")) {
     const field = document.createElement("label");
     field.className = "field workflow-output-name";
-    field.dataset.show = "trail";
     field.innerHTML = `<span>Trail output name</span><input id="trailOutputName" type="text" maxlength="120" value="star_trail" autocomplete="off"><small>.jpg is added automatically. Grouped inputs use this as the base name.</small>`;
-    renderSection.append(field);
+    trailCard.append(field);
   }
-  if (timelapseSection && !qs("#timelapseOutputName")) {
+  if (timelapseCard && !qs("#timelapseOutputName")) {
     const field = document.createElement("label");
     field.className = "field workflow-output-name";
-    field.dataset.show = "timelapse";
     field.innerHTML = `<span>Timelapse output name</span><input id="timelapseOutputName" type="text" maxlength="120" value="timelapse" autocomplete="off"><small>.mp4 is added automatically. Grouped inputs use this as the base name.</small>`;
-    timelapseSection.append(field);
+    timelapseCard.append(field);
   }
 
   ["trailOutputName", "timelapseOutputName"].forEach((id) => {
     const input = qs<HTMLInputElement>(`#${id}`);
-    input?.addEventListener("input", () => input.classList.toggle("workflow-field-error", !validOutputStem(input.value)));
+    if (!input || input.dataset.outputValidationReady === "1") return;
+    input.dataset.outputValidationReady = "1";
+    input.addEventListener("input", () => input.classList.toggle("workflow-field-error", !validOutputStem(input.value)));
   });
-
-  // main.ts applies data-show only when mode changes. Re-apply the current mode
-  // after dynamically inserting these fields so they are correct immediately.
-  qs<HTMLButtonElement>(".mode-tab.active")?.click();
 }
 
 function installWorkspaceQuickActions(): void {
@@ -148,7 +144,7 @@ function install(): boolean {
   installWorkspaceQuickActions();
   installLinkModeHelp();
   installGroupQuickActions();
-  return true;
+  return Boolean(qs("#trailOutputName") && qs("#timelapseOutputName") && qs("#workspaceTrail") && qs("#studioTrailGroup"));
 }
 
 function start(): void {
@@ -156,11 +152,7 @@ function start(): void {
   let attempts = 0;
   const timer = window.setInterval(() => {
     attempts += 1;
-    installOutputNames();
-    installWorkspaceQuickActions();
-    installLinkModeHelp();
-    installGroupQuickActions();
-    if ((qs("#workspaceTrail") && qs("#studioTrailGroup")) || attempts >= 160) window.clearInterval(timer);
+    if (install() || attempts >= 160) window.clearInterval(timer);
   }, 50);
 }
 
