@@ -1,0 +1,11 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+const read = (path) => readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
+
+test("JobRequest owns exact hardware selections", () => { const main = read("src/main.ts"); const rust = read("src-tauri/src/lib.rs"); assert.match(main, /groupHardware: hardwareMode\("groupHardwarePolicy"\)/); assert.match(main, /trailHardware: hardwareMode\("trailHardwarePolicy"\)/); assert.match(main, /timelapseHardware: hardwareMode\("timelapseHardwarePolicy"\)/); assert.doesNotMatch(rust, /HARDWARE_POLICIES|set_hardware_policies/); assert.match(rust, /request\.group_hardware/); });
+test("launch barrier workaround is gone", () => { assert.doesNotMatch(read("src/bootstrap.ts"), /LaunchStateSync/); });
+test("workspace images never receive full source URLs", () => { const main = read("src/main.ts"); const thumbs = read("src/photo-thumbnail-manager.ts"); assert.doesNotMatch(main, /convertFileSrc\(photo\.path\)/); assert.match(main, /data-thumb-path/); assert.match(thumbs, /invoke<ThumbnailResult>\("get_thumbnail"/); assert.doesNotMatch(thumbs, /createImageBitmap|ImageDecoder|fetch\(source/); });
+test("group previews share native thumbnail manager", () => { const parity = read("src/workspace-parity.ts"); assert.match(parity, /thumb\.dataset\.thumbPath = preview\.path/); assert.doesNotMatch(parity, /convertFileSrc\(path\)/); });
+test("manual review command is above Frames, groups are below Frames", () => { const studio = read("src/studio-editor.ts"); assert.match(studio, /controls\.insertAdjacentElement\("afterend", commandBar\)/); assert.match(studio, /layout\.insertAdjacentElement\("afterend", groupPanel\)/); assert.match(studio, /groupPanel\.insertAdjacentElement\("afterend", editorPanel\)/); });
+test("group mass selection and delete controls exist", () => { const studio = read("src/studio-editor.ts"); for (const id of ["studioSelectAllGroups", "studioClearGroupSelection", "studioInvertGroupSelection", "studioDeleteGroup", "studioMergeGroups"]) assert.match(studio, new RegExp(id)); assert.match(studio, /Frames become Ungrouped; source files are never deleted/); assert.match(studio, /selectedGroupIds/); assert.match(studio, /groupUndo/); });

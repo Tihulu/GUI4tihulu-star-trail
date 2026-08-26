@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import "./studio-editor.css";
-import { convertFileSrc } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 
 type GroupRecord = { id: string; name: string };
 type EditState = {
@@ -86,7 +86,8 @@ function setupStudioEditor(
   let assignments = new Map<string, string | null>();
   let edits = new Map<string, EditState>();
   let activeGroupId: string | null = null;
-  let mergeChecked = new Set<string>();
+  let selectedGroupIds = new Set<string>();
+  let groupSelectionAnchor: string | null = null;
   let draggedGroupId: string | null = null;
   let currentPrimaryPath: string | null = null;
   let editHistory: EditState[] = [cloneEdit(DEFAULT_EDIT)];
@@ -96,6 +97,7 @@ function setupStudioEditor(
   let groupRedo: GroupSnapshot[] = [];
   let beforeMode = false;
   let renderGeneration = 0;
+  let previewTimer: number | null = null;
   let saveTimer: number | null = null;
   let lastSourceKey = "";
 
@@ -123,10 +125,13 @@ function setupStudioEditor(
     <div class="studio-panel-head">
       <div><span class="toolbar-label">GROUP WORKSPACE</span><strong>Groups</strong><small>Drop selected photos on a group. Drag group cards to reorder them.</small></div>
       <div class="studio-panel-actions">
-        <button class="ghost-button compact-button" id="studioRenameGroup" type="button">Rename</button>
-        <button class="ghost-button compact-button" id="studioSplitGroup" type="button">Split selected</button>
-        <button class="ghost-button compact-button" id="studioMergeGroups" type="button">Merge checked</button>
-        <button class="ghost-button compact-button danger-text" id="studioDeleteGroup" type="button">Delete</button>
+        <button class="ghost-button compact-button" id="studioSelectAllGroups" type="button">Select all</button>
+        <button class="ghost-button compact-button" id="studioClearGroupSelection" type="button">Clear selection</button>
+        <button class="ghost-button compact-button" id="studioInvertGroupSelection" type="button">Invert selection</button>
+        <button class="ghost-button compact-button" id="studioRenameGroup" type="button">Rename active</button>
+        <button class="ghost-button compact-button" id="studioSplitGroup" type="button">Split selected frames</button>
+        <button class="ghost-button compact-button" id="studioMergeGroups" type="button">Merge selected groups</button>
+        <button class="ghost-button compact-button danger-text" id="studioDeleteGroup" type="button">Delete selected</button>
       </div>
     </div>
     <div class="studio-group-list" id="studioGroupList"></div>
@@ -134,7 +139,7 @@ function setupStudioEditor(
       <span id="studioGroupStatus">No groups yet. Existing group_* folders are detected automatically.</span>
       <button class="primary-button fit-primary" id="studioUseGroup" type="button">Use current group in Process →</button>
     </div>`;
-  commandBar.insertAdjacentElement("afterend", groupPanel);
+  layout.insertAdjacentElement("afterend", groupPanel);
 
   const editorPanel = document.createElement("section");
   editorPanel.className = "studio-editor-panel glass-card";
@@ -183,7 +188,7 @@ function setupStudioEditor(
       </div>
     </div>
     <div class="studio-editor-note"><strong>Workflow note:</strong> edits are stored in the studio and applied to edited JPEG exports. The original source frames remain untouched.</div>`;
-  layout.insertAdjacentElement("afterend", editorPanel);
+  groupPanel.insertAdjacentElement("afterend", editorPanel);
 
   const groupList = groupPanel.querySelector<HTMLDivElement>("#studioGroupList")!;
   const moveTarget = commandBar.querySelector<HTMLSelectElement>("#studioMoveTarget")!;
@@ -213,7 +218,7 @@ function setupStudioEditor(
   function restoreStateIfNeeded(): void {
     const key = sourceKey();
     if (!key || key === "No folder selected" || key === "Scanning…" || key === lastSourceKey) return;
-    lastSourceKey = key; groups = []; assignments = new Map(); edits = new Map(); activeGroupId = null; mergeChecked.clear(); groupUndo = []; groupRedo = [];
+    lastSourceKey = key; groups = []; assignments = new Map(); edits = new Map(); activeGroupId = null; selectedGroupIds.clear(); groupSelectionAnchor = null; groupUndo = []; groupRedo = [];
     try {
       const raw = localStorage.getItem(storageKey()); if (!raw) return;
       const parsed = JSON.parse(raw) as StudioState; if (parsed.version !== 1) return;
@@ -238,7 +243,7 @@ function setupStudioEditor(
   function snapshotGroups(): GroupSnapshot { return { groups: groups.map((group) => ({ ...group })), assignments: [...assignments], activeGroupId }; }
 
   function restoreGroupSnapshot(snapshot: GroupSnapshot): void {
-    groups = snapshot.groups.map((group) => ({ ...group })); assignments = new Map(snapshot.assignments); activeGroupId = snapshot.activeGroupId; mergeChecked.clear(); renderGroups(); applyGroupFilter(); scheduleSave();
+    groups = snapshot.groups.map((group) => ({ ...group })); assignments = new Map(snapshot.assignments); activeGroupId = snapshot.activeGroupId; selectedGroupIds.clear(); groupSelectionAnchor = null; renderGroups(); applyGroupFilter(); scheduleSave();
   }
   function recordGroupMutation(): void { groupUndo.push(snapshotGroups()); if (groupUndo.length > 50) groupUndo.shift(); groupRedo = []; }
 
@@ -258,24 +263,67 @@ function setupStudioEditor(
   }
 
   function renderGroups(): void {
-    const pathSet = new Set(allPaths()); for (const path of [...assignments.keys()]) if (!pathSet.has(path)) assignments.delete(path);
-    groupList.innerHTML = ""; const ungroupedCount = allPaths().filter((path) => !assignments.get(path)).length;
-    const allCard = document.createElement("button"); allCard.type = "button"; allCard.className = `studio-group-card all-card${activeGroupId === null ? " active" : ""}`; allCard.innerHTML = `<span class="group-card-main"><strong>All frames</strong><small>${allPaths().length} photos · ${ungroupedCount} ungrouped</small></span>`; allCard.addEventListener("click", () => { activeGroupId = null; renderGroups(); applyGroupFilter(); }); groupList.append(allCard);
+    const pathSet = new Set(allPaths());
+    for (const path of [...assignments.keys()]) if (!pathSet.has(path)) assignments.delete(path);
+    const validGroupIds = new Set(groups.map((group) => group.id));
+    selectedGroupIds = new Set([...selectedGroupIds].filter((id) => validGroupIds.has(id)));
+    groupList.innerHTML = "";
+    const ungroupedCount = allPaths().filter((path) => !assignments.get(path)).length;
+    const allCard = document.createElement("button");
+    allCard.type = "button"; allCard.className = `studio-group-card all-card${activeGroupId === null ? " active" : ""}`;
+    allCard.innerHTML = `<span class="group-card-main"><strong>All frames</strong><small>${allPaths().length} photos · ${ungroupedCount} ungrouped</small></span>`;
+    allCard.addEventListener("click", () => { activeGroupId = null; renderGroups(); applyGroupFilter(); });
+    groupList.append(allCard);
+
+    const selectGroup = (groupId: string, event: MouseEvent) => {
+      const order = groups.map((group) => group.id);
+      if (event.shiftKey && groupSelectionAnchor && order.includes(groupSelectionAnchor)) {
+        if (!(event.ctrlKey || event.metaKey)) selectedGroupIds.clear();
+        const [from, to] = [order.indexOf(groupSelectionAnchor), order.indexOf(groupId)].sort((a, b) => a - b);
+        for (let index = from; index <= to; index += 1) selectedGroupIds.add(order[index]);
+      } else if (event.ctrlKey || event.metaKey) {
+        if (selectedGroupIds.has(groupId)) selectedGroupIds.delete(groupId); else selectedGroupIds.add(groupId);
+        groupSelectionAnchor = groupId;
+      } else {
+        if (selectedGroupIds.has(groupId)) selectedGroupIds.delete(groupId); else selectedGroupIds.add(groupId);
+        groupSelectionAnchor = groupId;
+      }
+      renderGroups();
+    };
+
     for (const group of groups) {
-      const count = groupPaths(group.id).length; const card = document.createElement("article"); card.className = `studio-group-card${activeGroupId === group.id ? " active" : ""}`; card.draggable = true; card.dataset.groupId = group.id;
-      card.innerHTML = `<label class="group-check" title="Select for merge"><input type="checkbox" ${mergeChecked.has(group.id) ? "checked" : ""}><span></span></label><button type="button" class="group-open"><span class="group-card-main"><strong>${escapeHtml(group.name)}</strong><small>${count} photo${count === 1 ? "" : "s"}</small></span><span class="group-drop-hint">drop photos</span></button>`;
-      card.querySelector<HTMLInputElement>("input")?.addEventListener("change", (event) => { if ((event.target as HTMLInputElement).checked) mergeChecked.add(group.id); else mergeChecked.delete(group.id); });
-      card.querySelector<HTMLButtonElement>(".group-open")?.addEventListener("click", () => { activeGroupId = group.id; renderGroups(); applyGroupFilter(); });
-      card.addEventListener("dragstart", (event) => { draggedGroupId = group.id; event.dataTransfer?.setData("application/x-tihulu-group", group.id); }); card.addEventListener("dragend", () => { draggedGroupId = null; card.classList.remove("group-drag-over"); });
-      card.addEventListener("dragover", (event) => { event.preventDefault(); card.classList.add("group-drag-over"); }); card.addEventListener("dragleave", () => card.classList.remove("group-drag-over"));
+      const count = groupPaths(group.id).length;
+      const card = document.createElement("article");
+      card.className = `studio-group-card${activeGroupId === group.id ? " active" : ""}${selectedGroupIds.has(group.id) ? " group-selected" : ""}`;
+      card.draggable = true; card.dataset.groupId = group.id;
+      card.innerHTML = `<button type="button" class="group-select-toggle" aria-pressed="${selectedGroupIds.has(group.id)}" title="Select group"><span></span></button><button type="button" class="group-open"><span class="group-card-main"><strong>${escapeHtml(group.name)}</strong><small>${count} photo${count === 1 ? "" : "s"}</small></span><span class="group-drop-hint">drop photos</span></button>`;
+      card.querySelector<HTMLButtonElement>(".group-select-toggle")?.addEventListener("click", (event) => { event.stopPropagation(); selectGroup(group.id, event); });
+      card.querySelector<HTMLButtonElement>(".group-open")?.addEventListener("click", (event) => {
+        if (event.ctrlKey || event.metaKey || event.shiftKey) { selectGroup(group.id, event); return; }
+        activeGroupId = group.id; renderGroups(); applyGroupFilter();
+      });
+      card.addEventListener("dragstart", (event) => { draggedGroupId = group.id; event.dataTransfer?.setData("application/x-tihulu-group", group.id); });
+      card.addEventListener("dragend", () => { draggedGroupId = null; card.classList.remove("group-drag-over"); });
+      card.addEventListener("dragover", (event) => { event.preventDefault(); card.classList.add("group-drag-over"); });
+      card.addEventListener("dragleave", () => card.classList.remove("group-drag-over"));
       card.addEventListener("drop", (event) => {
-        event.preventDefault(); card.classList.remove("group-drag-over"); const incomingGroup = event.dataTransfer?.getData("application/x-tihulu-group") || draggedGroupId;
-        if (incomingGroup && incomingGroup !== group.id) { recordGroupMutation(); const from = groups.findIndex((item) => item.id === incomingGroup); const to = groups.findIndex((item) => item.id === group.id); if (from >= 0 && to >= 0) { const [moved] = groups.splice(from, 1); groups.splice(to, 0, moved); renderGroups(); scheduleSave(); } return; }
-        const paths = selectedPaths(); const transferPath = event.dataTransfer?.getData("text/plain"); const movePaths = paths.length ? paths : transferPath ? [transferPath] : []; if (movePaths.length) movePathsToGroup(movePaths, group.id);
-      }); groupList.append(card);
+        event.preventDefault(); card.classList.remove("group-drag-over");
+        const incomingGroup = event.dataTransfer?.getData("application/x-tihulu-group") || draggedGroupId;
+        if (incomingGroup && incomingGroup !== group.id) {
+          recordGroupMutation(); const from = groups.findIndex((item) => item.id === incomingGroup); const to = groups.findIndex((item) => item.id === group.id);
+          if (from >= 0 && to >= 0) { const [moved] = groups.splice(from, 1); groups.splice(to, 0, moved); renderGroups(); scheduleSave(); }
+          return;
+        }
+        const paths = selectedPaths(); const transferPath = event.dataTransfer?.getData("text/plain"); const movePaths = paths.length ? paths : transferPath ? [transferPath] : [];
+        if (movePaths.length) movePathsToGroup(movePaths, group.id);
+      });
+      groupList.append(card);
     }
     moveTarget.innerHTML = `<option value="">Choose group…</option><option value="__ungrouped__">Ungrouped</option>${groups.map((group) => `<option value="${group.id}">${escapeHtml(group.name)}</option>`).join("")}`;
-    const current = activeGroup(); groupStatus.textContent = current ? `${current.name}: ${groupPaths(current.id).length} photo(s). Drag frames in the grid to reorder; drop them on another group to move.` : `${groups.length} group(s) · ${ungroupedCount} ungrouped photo(s)`; updateGroupHistoryButtons();
+    const current = activeGroup();
+    const selectionText = selectedGroupIds.size ? ` · ${selectedGroupIds.size} selected` : "";
+    groupStatus.textContent = current ? `${current.name}: ${groupPaths(current.id).length} photo(s)${selectionText}. Active group controls the frame filter; selection is independent.` : `${groups.length} group(s) · ${ungroupedCount} ungrouped photo(s)${selectionText}`;
+    updateGroupHistoryButtons();
   }
 
   function movePathsToGroup(paths: string[], groupId: string | null): void { if (paths.length === 0) return; recordGroupMutation(); paths.forEach((path) => assignments.set(path, groupId)); if (groupId) activeGroupId = groupId; renderGroups(); applyGroupFilter(); scheduleSave(); }
@@ -319,6 +367,13 @@ function setupStudioEditor(
   function updateEditButtons(): void { editorPanel.querySelector<HTMLButtonElement>("#editUndo")!.disabled = editHistoryIndex <= 0; editorPanel.querySelector<HTMLButtonElement>("#editRedo")!.disabled = editHistoryIndex >= editHistory.length - 1; editorPanel.querySelector<HTMLButtonElement>("#editPaste")!.disabled = !editClipboard || !currentPrimaryPath; }
   function applyCurrentEditTo(paths: string[]): void { if (!currentPrimaryPath || paths.length === 0) return; const state = cloneEdit(currentEditFromControls()); paths.forEach((path) => edits.set(path, cloneEdit(state))); scheduleSave(); toast(`Applied edit settings to ${paths.length} frame${paths.length === 1 ? "" : "s"}.`); }
 
+  function schedulePreview(path: string): void { if (previewTimer !== null) window.clearTimeout(previewTimer); previewTimer = window.setTimeout(() => { previewTimer = null; void renderPreview(path); }, 45); }
+  async function previewSource(path: string, maxSide: number): Promise<string> {
+    if (maxSide > 1600) return path;
+    const tile = tiles().find((item) => item.dataset.path === path); const version = tile?.querySelector<HTMLImageElement>("img[data-thumb-path]")?.dataset.thumbVersion ?? "";
+    const result = await invoke<{ path: string }>("get_thumbnail", { sourcePath: path, maxWidth: maxSide, maxHeight: maxSide, sourceVersion: `editor:${version}` });
+    return result.path;
+  }
   async function renderPreview(path: string): Promise<void> {
     const generation = ++renderGeneration; const edit = beforeMode ? cloneEdit(DEFAULT_EDIT) : cloneEdit(edits.get(path) ?? DEFAULT_EDIT); editRenderMode.textContent = beforeMode ? "Before · original preview" : "Rendering edited preview…";
     try { const rendered = await buildEditedCanvas(path, edit, 1200); if (generation !== renderGeneration) return; preview.innerHTML = ""; preview.append(rendered.canvas); editRenderMode.textContent = rendered.pixelEdited ? "Edited preview · pixel renderer" : "Edited preview · limited fallback"; }
@@ -326,7 +381,7 @@ function setupStudioEditor(
   }
 
   async function buildEditedCanvas(path: string, edit: EditState, maxSide: number): Promise<{ canvas: HTMLCanvasElement; pixelEdited: boolean }> {
-    const image = await loadLocalImage(path); const sourceW = image.width; const sourceH = image.height; if (!sourceW || !sourceH) { image.close(); throw new Error("Image dimensions unavailable"); }
+    const image = await loadLocalImage(await previewSource(path, maxSide)); const sourceW = image.width; const sourceH = image.height; if (!sourceW || !sourceH) { image.close(); throw new Error("Image dimensions unavailable"); }
     const cropRect = centeredCrop(sourceW, sourceH, edit.crop); const scale = Math.min(1, maxSide / Math.max(cropRect.w, cropRect.h)); const baseW = Math.max(1, Math.round(cropRect.w * scale)); const baseH = Math.max(1, Math.round(cropRect.h * scale)); const radians = edit.rotation * Math.PI / 180; const absCos = Math.abs(Math.cos(radians)); const absSin = Math.abs(Math.sin(radians)); const outW = Math.max(1, Math.round(baseW * absCos + baseH * absSin)); const outH = Math.max(1, Math.round(baseW * absSin + baseH * absCos));
     const canvas = document.createElement("canvas"); canvas.width = outW; canvas.height = outH; const ctx = canvas.getContext("2d", { willReadFrequently: true }); if (!ctx) { image.close(); throw new Error("Canvas renderer unavailable"); }
     try { ctx.save(); ctx.translate(outW / 2, outH / 2); ctx.rotate(radians); ctx.drawImage(image.source, cropRect.x, cropRect.y, cropRect.w, cropRect.h, -baseW / 2, -baseH / 2, baseW, baseH); ctx.restore(); }
@@ -407,15 +462,18 @@ function setupStudioEditor(
   commandBar.querySelector<HTMLButtonElement>("#studioGroupsFromFolders")!.addEventListener("click", () => autoGroupsFromPaths(false));
   commandBar.querySelector<HTMLButtonElement>("#studioNewGroup")!.addEventListener("click", () => { const paths = selectedPaths(); if (!paths.length) { toast("Select one or more photos first."); return; } const name = window.prompt("New group name", uniqueGroupName(`Group ${groups.length + 1}`)); if (!name?.trim()) return; recordGroupMutation(); const group = { id: crypto.randomUUID(), name: uniqueGroupName(name.trim()) }; groups.push(group); paths.forEach((path) => assignments.set(path, group.id)); activeGroupId = group.id; renderGroups(); applyGroupFilter(); scheduleSave(); });
   moveTarget.addEventListener("change", () => { const value = moveTarget.value; if (!value) return; const paths = selectedPaths(); if (!paths.length) { toast("Select photos to move first."); moveTarget.value = ""; return; } movePathsToGroup(paths, value === "__ungrouped__" ? null : value); moveTarget.value = ""; });
+  groupPanel.querySelector<HTMLButtonElement>("#studioSelectAllGroups")!.addEventListener("click", () => { selectedGroupIds = new Set(groups.map((group) => group.id)); groupSelectionAnchor = groups.at(-1)?.id ?? null; renderGroups(); });
+  groupPanel.querySelector<HTMLButtonElement>("#studioClearGroupSelection")!.addEventListener("click", () => { selectedGroupIds.clear(); groupSelectionAnchor = null; renderGroups(); });
+  groupPanel.querySelector<HTMLButtonElement>("#studioInvertGroupSelection")!.addEventListener("click", () => { selectedGroupIds = new Set(groups.filter((group) => !selectedGroupIds.has(group.id)).map((group) => group.id)); groupSelectionAnchor = null; renderGroups(); });
   groupPanel.querySelector<HTMLButtonElement>("#studioRenameGroup")!.addEventListener("click", () => { const group = activeGroup(); if (!group) { toast("Choose a group first."); return; } const name = window.prompt("Rename group", group.name); if (!name?.trim() || name.trim() === group.name) return; recordGroupMutation(); group.name = uniqueGroupName(name.trim()); renderGroups(); scheduleSave(); });
-  groupPanel.querySelector<HTMLButtonElement>("#studioDeleteGroup")!.addEventListener("click", () => { const group = activeGroup(); if (!group) { toast("Choose a group first."); return; } if (!window.confirm(`Delete ${group.name}? Photos become ungrouped; files are not deleted.`)) return; recordGroupMutation(); assignments.forEach((id, path) => { if (id === group.id) assignments.set(path, null); }); groups = groups.filter((item) => item.id !== group.id); activeGroupId = null; renderGroups(); applyGroupFilter(); scheduleSave(); });
+  groupPanel.querySelector<HTMLButtonElement>("#studioDeleteGroup")!.addEventListener("click", () => { const ids = [...selectedGroupIds]; if (!ids.length) { toast("Select one or more groups first."); return; } if (!window.confirm(`Delete ${ids.length} selected group${ids.length === 1 ? "" : "s"}? Frames become Ungrouped; source files are never deleted.`)) return; recordGroupMutation(); assignments.forEach((id, path) => { if (id && selectedGroupIds.has(id)) assignments.set(path, null); }); groups = groups.filter((item) => !selectedGroupIds.has(item.id)); if (activeGroupId && selectedGroupIds.has(activeGroupId)) activeGroupId = null; selectedGroupIds.clear(); groupSelectionAnchor = null; renderGroups(); applyGroupFilter(); scheduleSave(); });
   groupPanel.querySelector<HTMLButtonElement>("#studioSplitGroup")!.addEventListener("click", () => { const current = activeGroup(); const paths = selectedPaths().filter((path) => !current || assignments.get(path) === current.id); if (!paths.length) { toast("Select photos from the current group first."); return; } const name = window.prompt("New split group name", uniqueGroupName(`${current?.name ?? "Group"} split`)); if (!name?.trim()) return; recordGroupMutation(); const group = { id: crypto.randomUUID(), name: uniqueGroupName(name.trim()) }; groups.push(group); paths.forEach((path) => assignments.set(path, group.id)); activeGroupId = group.id; renderGroups(); applyGroupFilter(); scheduleSave(); });
-  groupPanel.querySelector<HTMLButtonElement>("#studioMergeGroups")!.addEventListener("click", () => { const ids = [...mergeChecked]; if (ids.length < 2) { toast("Check at least two groups to merge."); return; } const selectedGroups = groups.filter((group) => ids.includes(group.id)); const name = window.prompt("Merged group name", uniqueGroupName(selectedGroups.map((group) => group.name).join(" + "))); if (!name?.trim()) return; recordGroupMutation(); const target = { id: crypto.randomUUID(), name: uniqueGroupName(name.trim()) }; groups.push(target); assignments.forEach((id, path) => { if (id && ids.includes(id)) assignments.set(path, target.id); }); groups = groups.filter((group) => !ids.includes(group.id)); activeGroupId = target.id; mergeChecked.clear(); renderGroups(); applyGroupFilter(); scheduleSave(); });
+  groupPanel.querySelector<HTMLButtonElement>("#studioMergeGroups")!.addEventListener("click", () => { const ids = [...selectedGroupIds]; if (ids.length < 2) { toast("Select at least two groups to merge."); return; } const selectedGroups = groups.filter((group) => ids.includes(group.id)); const name = window.prompt("Merged group name", uniqueGroupName(selectedGroups.map((group) => group.name).join(" + "))); if (!name?.trim()) return; recordGroupMutation(); const target = { id: crypto.randomUUID(), name: uniqueGroupName(name.trim()) }; groups.push(target); assignments.forEach((id, path) => { if (id && selectedGroupIds.has(id)) assignments.set(path, target.id); }); groups = groups.filter((group) => !selectedGroupIds.has(group.id)); activeGroupId = target.id; selectedGroupIds = new Set([target.id]); groupSelectionAnchor = target.id; renderGroups(); applyGroupFilter(); scheduleSave(); });
   commandBar.querySelector<HTMLButtonElement>("#studioGroupUndo")!.addEventListener("click", () => { const previous = groupUndo.pop(); if (!previous) return; groupRedo.push(snapshotGroups()); restoreGroupSnapshot(previous); });
   commandBar.querySelector<HTMLButtonElement>("#studioGroupRedo")!.addEventListener("click", () => { const next = groupRedo.pop(); if (!next) return; groupUndo.push(snapshotGroups()); restoreGroupSnapshot(next); });
   groupPanel.querySelector<HTMLButtonElement>("#studioUseGroup")!.addEventListener("click", () => void useCurrentGroupForProcess());
 
-  editorPanel.querySelectorAll<HTMLInputElement>("input[type=range][data-edit-key]").forEach((input) => { const key = input.dataset.editKey as Exclude<keyof EditState, "crop">; input.addEventListener("input", () => { const value = Number(input.value); updateSliderOutput(key, value); if (currentPrimaryPath) { edits.set(currentPrimaryPath, currentEditFromControls()); void renderPreview(currentPrimaryPath); } }); input.addEventListener("change", () => commitEdit()); });
+  editorPanel.querySelectorAll<HTMLInputElement>("input[type=range][data-edit-key]").forEach((input) => { const key = input.dataset.editKey as Exclude<keyof EditState, "crop">; input.addEventListener("input", () => { const value = Number(input.value); updateSliderOutput(key, value); if (currentPrimaryPath) { edits.set(currentPrimaryPath, currentEditFromControls()); schedulePreview(currentPrimaryPath); } }); input.addEventListener("change", () => commitEdit()); });
   editorPanel.querySelector<HTMLSelectElement>("#edit-crop")!.addEventListener("change", (event) => { editorPanel.querySelector<HTMLOutputElement>("#edit-crop-value")!.value = (event.target as HTMLSelectElement).value; commitEdit(); });
   editorPanel.querySelectorAll<HTMLButtonElement>(".studio-info[data-edit-info]").forEach((button) => button.addEventListener("click", () => { const key = button.dataset.editInfo as keyof EditState; const info = EDIT_INFO[key]; editInfo.innerHTML = `<strong>${escapeHtml(info.title)}</strong><span>${escapeHtml(info.body)}</span>`; }));
   editorPanel.querySelector<HTMLButtonElement>("#editBefore")!.addEventListener("click", (event) => { beforeMode = !beforeMode; (event.currentTarget as HTMLButtonElement).classList.toggle("active", beforeMode); (event.currentTarget as HTMLButtonElement).textContent = beforeMode ? "After" : "Before"; if (currentPrimaryPath) void renderPreview(currentPrimaryPath); });

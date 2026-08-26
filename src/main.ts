@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import "./style.css";
-import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+import { invoke } from "@tauri-apps/api/core";
+import { buildOutputPath, normalizeHardwareMode, type HardwareMode } from "./job-policy";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import { openPath, openUrl } from "@tauri-apps/plugin-opener";
@@ -34,6 +35,9 @@ type JobRequest = {
   output: string;
   executable: string | null;
   files: string[] | null;
+  groupHardware: HardwareMode;
+  trailHardware: HardwareMode;
+  timelapseHardware: HardwareMode;
   threshold: number;
   minMatches: number;
   maxSide: number;
@@ -115,6 +119,7 @@ app.innerHTML = `
     <section class="studio-section" id="section-photos">
       <section class="intro compact-intro"><div><p class="eyebrow">FRAME CURATION</p><h1>Photo Workspace</h1><p class="lede">Preview, include or exclude frames, inspect file metadata and set the exact timelapse order before processing.</p></div><div class="workspace-count" id="workspaceCount">0 photos</div></section>
       <section class="workspace-toolbar glass-card"><div class="toolbar-path"><span class="toolbar-label">SOURCE</span><strong id="photoSourcePath">No folder selected</strong></div><div class="toolbar-actions"><label class="mini-check"><input id="workspaceRecursive" type="checkbox" checked> Recursive</label><button class="secondary-button" id="chooseAndScan" type="button">Choose folder</button><button class="ghost-button" id="rescanPhotos" type="button">Rescan</button></div></section>
+      <section class="workspace-toolbar glass-card" id="workspaceOutputToolbar"><div class="toolbar-path"><span class="toolbar-label">OUTPUT</span><strong class="empty" id="workspaceOutputPath">No output folder selected</strong></div><div class="toolbar-actions"><button class="secondary-button" id="workspacePickOutput" type="button">Choose / change output</button><button class="ghost-button" id="workspaceOpenOutput" type="button" disabled>Open</button></div></section>
       <section class="photo-controls glass-card"><div class="control-cluster"><button class="ghost-button compact-button" id="selectAllPhotos" type="button">Select all</button><button class="ghost-button compact-button" id="clearPhotoSelection" type="button">Clear selection</button><button class="ghost-button compact-button" id="invertPhotoSelection" type="button">Invert selection</button></div><div class="control-cluster"><button class="secondary-button compact-button" id="includeSelected" type="button">Include selected</button><button class="ghost-button compact-button danger-text" id="excludeSelected" type="button">Exclude selected</button></div><label class="sort-field"><span>Order</span><select id="photoSort"><option value="manual">Manual / drag</option><option value="name-asc">Name A–Z</option><option value="name-desc">Name Z–A</option><option value="date-asc">Capture/file date ↑</option><option value="date-desc">Capture/file date ↓</option></select></label><div class="photo-stats"><span id="includedCount">0 included</span><span id="selectedCount">0 selected</span></div></section>
       <section class="photo-layout"><div class="photo-grid-panel glass-card"><div class="photo-grid-head"><div><strong>Frames</strong><small>Click to select · Shift-click a range · drag selected frames as a block in Manual order</small></div><label class="mini-check"><input id="allIncluded" type="checkbox" checked> Include all</label></div><div class="photo-grid" id="photoGrid"><div class="empty-state"><strong>No photos loaded</strong><span>Choose an input folder to build the thumbnail workspace.</span></div></div></div><aside class="inspector glass-card" id="photoInspector"><div class="inspector-empty"><span class="inspector-star">✦</span><strong>Select a frame</strong><p>Filename, path, file type, size and capture/file time appear here.</p></div></aside></section>
       <section class="workspace-footer-card glass-card"><div><strong>Workspace selection can drive every quick workflow</strong><p>When enabled in Process, excluded frames are omitted and included frames are staged in this exact order. Original source photos remain untouched.</p></div><button class="primary-button fit-primary" id="goToProcess" type="button"><span>Process selected frames</span><span>→</span></button></section>
@@ -185,7 +190,17 @@ function escapeHtml(value: string): string {
 }
 function numberValue(id: string): number { return Number(qs<HTMLInputElement>(`#${id}`).value); }
 function checked(id: string): boolean { return qs<HTMLInputElement>(`#${id}`).checked; }
+function hardwareMode(id: string): HardwareMode { return normalizeHardwareMode(document.querySelector<HTMLButtonElement>(`#${id} button.selected`)?.dataset.value); }
 function setPath(element: HTMLDivElement, value: string, emptyText: string): void { element.textContent = value || emptyText; element.classList.toggle("empty", !value); element.title = value; }
+function setOutputPath(value: string): void {
+  outputPath = value;
+  setPath(outputPathEl, outputPath, "Choose where generated files should be saved");
+  const workspaceLabel = document.querySelector<HTMLElement>("#workspaceOutputPath");
+  if (workspaceLabel) { workspaceLabel.textContent = outputPath || "No output folder selected"; workspaceLabel.classList.toggle("empty", !outputPath); workspaceLabel.title = outputPath; }
+  const workspaceOpen = document.querySelector<HTMLButtonElement>("#workspaceOpenOutput");
+  if (workspaceOpen) workspaceOpen.disabled = !outputPath;
+  updateStartState();
+}
 function setSection(next: Section): void { document.querySelectorAll<HTMLElement>(".studio-section").forEach((item) => item.classList.toggle("active", item.id === `section-${next}`)); document.querySelectorAll<HTMLButtonElement>(".section-tab").forEach((button) => button.classList.toggle("active", button.dataset.section === next)); }
 function includedPhotos(): PhotoRecord[] { return photos.filter((photo) => photo.included); }
 
@@ -226,9 +241,37 @@ async function detectEngine(): Promise<void> {
   enginePill.className = `engine-pill ${engine.found ? "ready" : "missing"}`; engineText.textContent = engine.found ? "Engine ready" : "Engine missing"; enginePill.title = engine.path ? `${engine.detail}\n${engine.path}` : engine.detail; updateStartState();
 }
 function currentFilesForJob(): string[] | null { const useSelection = qs<HTMLInputElement>("#useWorkspaceSelection").checked; if (!useSelection || scannedInput !== inputPath || photos.length === 0) return null; return includedPhotos().map((photo) => photo.path); }
-function safeOutputStem(value: string, fallback: string): string { const trimmed = value.trim().replace(/\.(?:jpe?g|mp4)$/i, ""); const cleaned = trimmed.replace(/[\\/:*?"<>|]+/g, "_").replace(/^\.+$/, "").slice(0, 120); return cleaned || fallback; }
-function outputForJob(): string { if (mode !== "trail" && mode !== "timelapse") return outputPath; const input = document.querySelector<HTMLInputElement>(mode === "trail" ? "#trailOutputName" : "#timelapseOutputName"); const stem = safeOutputStem(input?.value ?? "", mode === "trail" ? "star_trail" : "timelapse"); const extension = mode === "trail" ? ".jpg" : ".mp4"; const separator = outputPath.endsWith("/") || outputPath.endsWith("\\") ? "" : (outputPath.includes("\\") ? "\\" : "/"); return `${outputPath}${separator}${stem}${extension}`; }
-function makeJobRequest(): JobRequest { return { command: mode, input: inputPath, output: outputForJob(), executable: customExecutable.value.trim() || engine.path, files: currentFilesForJob(), threshold: numberValue("threshold"), minMatches: numberValue("minMatches"), maxSide: numberValue("maxSide"), nfeatures: numberValue("nfeatures"), timeMetadata: checked("timeMetadata"), timeWindowMinutes: numberValue("timeWindowHours") * 60, recursive: checked("recursive"), quiet: checked("quiet"), linkMode: selectedLinkMode, minFrames: numberValue("minFrames"), jpegQuality: numberValue("jpegQuality"), timelapse: checked("makeTimelapse"), fps: numberValue("fps"), videoMaxSide: numberValue("videoMaxSide"), codec: qs<HTMLInputElement>("#codec").value }; }
+function outputForJob(): string {
+  const input = document.querySelector<HTMLInputElement>(mode === "trail" ? "#trailOutputName" : "#timelapseOutputName");
+  return buildOutputPath(mode, outputPath, input?.value ?? "");
+}
+function makeJobRequest(): JobRequest {
+  return {
+    command: mode,
+    input: inputPath,
+    output: outputForJob(),
+    executable: customExecutable.value.trim() || engine.path,
+    files: currentFilesForJob(),
+    groupHardware: hardwareMode("groupHardwarePolicy"),
+    trailHardware: hardwareMode("trailHardwarePolicy"),
+    timelapseHardware: hardwareMode("timelapseHardwarePolicy"),
+    threshold: numberValue("threshold"),
+    minMatches: numberValue("minMatches"),
+    maxSide: numberValue("maxSide"),
+    nfeatures: numberValue("nfeatures"),
+    timeMetadata: checked("timeMetadata"),
+    timeWindowMinutes: numberValue("timeWindowHours") * 60,
+    recursive: checked("recursive"),
+    quiet: checked("quiet"),
+    linkMode: selectedLinkMode,
+    minFrames: numberValue("minFrames"),
+    jpegQuality: numberValue("jpegQuality"),
+    timelapse: checked("makeTimelapse"),
+    fps: numberValue("fps"),
+    videoMaxSide: numberValue("videoMaxSide"),
+    codec: qs<HTMLInputElement>("#codec").value,
+  };
+}
 function validateRequest(request: JobRequest): string | null { if (!engine.found) return "Install or select a tihulu engine first."; if (!request.input) return "Choose an input path."; if (!request.output) return "Choose an output path."; if (request.files?.length === 0) return "Include at least one frame in Photo Workspace."; if (request.threshold < 0 || request.threshold > 1) return "Threshold must be between 0 and 1."; if (request.minMatches < 4) return "Minimum matches must be at least 4."; if (request.codec.length !== 4) return "Codec must have four characters."; return null; }
 async function startJob(): Promise<void> { const request = makeJobRequest(); const error = validateRequest(request); if (error) { appendLog(error, "stderr"); return; } setRunning(true); runStateText.textContent = request.files ? `Staging ${request.files.length} selected frame(s)…` : "Starting tihulu…"; consoleCard.classList.remove("hidden"); try { const result = await invoke<StartResult>("start_job", { request }); appendLog(`$ ${result.commandDisplay}`); if (result.stagedFiles > 0) appendLog(`Photo Workspace: ${result.stagedFiles} included frame(s) staged in workspace order.`); runStateText.textContent = `PID ${result.pid} · ${modes[mode].action}`; } catch (error) { appendLog(String(error), "stderr"); setRunning(false); } }
 
@@ -239,7 +282,7 @@ function selectedRecords(): PhotoRecord[] { return photos.filter((photo) => sele
 function setIncludedForSelection(included: boolean): void { if (selectedPaths.size === 0) return; photos.forEach((photo) => { if (selectedPaths.has(photo.path)) photo.included = included; }); renderPhotoGrid(); }
 function selectPhoto(index: number, event: MouseEvent): void { const path = photos[index]?.path; if (!path) return; if (event.shiftKey && selectionAnchor !== null) { if (!(event.ctrlKey || event.metaKey)) selectedPaths.clear(); const [from, to] = [selectionAnchor, index].sort((a, b) => a - b); for (let cursor = from; cursor <= to; cursor += 1) selectedPaths.add(photos[cursor].path); } else if (event.ctrlKey || event.metaKey) { if (selectedPaths.has(path)) selectedPaths.delete(path); else selectedPaths.add(path); selectionAnchor = index; } else { selectedPaths.clear(); selectedPaths.add(path); selectionAnchor = index; } renderPhotoGrid(); }
 function updatePhotoStats(): void { qs<HTMLElement>("#workspaceCount").textContent = `${photos.length} photo${photos.length === 1 ? "" : "s"}`; qs<HTMLElement>("#includedCount").textContent = `${includedPhotos().length} included`; qs<HTMLElement>("#selectedCount").textContent = `${selectedPaths.size} selected`; qs<HTMLInputElement>("#allIncluded").checked = photos.length > 0 && includedPhotos().length === photos.length; qs<HTMLElement>("#photoSourcePath").textContent = scannedInput || "No folder selected"; updateStartState(); }
-function renderInspector(): void { const inspector = qs<HTMLElement>("#photoInspector"); const selected = selectedRecords(); if (selected.length === 0) { inspector.innerHTML = `<div class="inspector-empty"><span class="inspector-star">✦</span><strong>Select a frame</strong><p>Filename, path, file type, size and capture/file time appear here.</p></div>`; return; } const photo = selected[0]; const preview = photo.browserPreviewable ? `<img class="inspector-preview" src="${escapeHtml(convertFileSrc(photo.path))}" alt="">` : `<div class="inspector-raw"><span>${escapeHtml(photo.extension.toUpperCase())}</span><small>RAW preview is available in Full Desktop</small></div>`; inspector.innerHTML = `${preview}<div class="inspector-content"><p class="eyebrow">FRAME DETAILS</p><h2>${escapeHtml(photo.name)}</h2><dl class="metadata-list"><div><dt>Status</dt><dd>${photo.included ? "Included" : "Excluded"}</dd></div><div><dt>Format</dt><dd>${escapeHtml(photo.extension.toUpperCase() || "Unknown")}${photo.isRaw ? " · RAW" : ""}</dd></div><div><dt>Size</dt><dd>${formatBytes(photo.sizeBytes)}</dd></div><div><dt>Capture / file date</dt><dd>${escapeHtml(formatDate(photo.modifiedMs))}</dd></div><div><dt>Path</dt><dd class="path-meta">${escapeHtml(photo.path)}</dd></div></dl>${selected.length > 1 ? `<p class="multi-note">${selected.length} frames selected. Include/exclude and drag actions apply to the selection.</p>` : ""}</div>`; }
+function renderInspector(): void { const inspector = qs<HTMLElement>("#photoInspector"); const selected = selectedRecords(); if (selected.length === 0) { inspector.innerHTML = `<div class="inspector-empty"><span class="inspector-star">✦</span><strong>Select a frame</strong><p>Filename, path, file type, size and capture/file time appear here.</p></div>`; return; } const photo = selected[0]; const preview = photo.browserPreviewable ? `<img class="inspector-preview" data-thumb-path="${escapeHtml(photo.path)}" data-thumb-version="${photo.modifiedMs ?? 0}:${photo.sizeBytes}" alt="">` : `<div class="inspector-raw"><span>${escapeHtml(photo.extension.toUpperCase())}</span><small>RAW preview is available in Full Desktop</small></div>`; inspector.innerHTML = `${preview}<div class="inspector-content"><p class="eyebrow">FRAME DETAILS</p><h2>${escapeHtml(photo.name)}</h2><dl class="metadata-list"><div><dt>Status</dt><dd>${photo.included ? "Included" : "Excluded"}</dd></div><div><dt>Format</dt><dd>${escapeHtml(photo.extension.toUpperCase() || "Unknown")}${photo.isRaw ? " · RAW" : ""}</dd></div><div><dt>Size</dt><dd>${formatBytes(photo.sizeBytes)}</dd></div><div><dt>Capture / file date</dt><dd>${escapeHtml(formatDate(photo.modifiedMs))}</dd></div><div><dt>Path</dt><dd class="path-meta">${escapeHtml(photo.path)}</dd></div></dl>${selected.length > 1 ? `<p class="multi-note">${selected.length} frames selected. Include/exclude and drag actions apply to the selection.</p>` : ""}</div>`; }
 function renderPhotoGrid(): void {
   const grid = qs<HTMLDivElement>("#photoGrid");
   if (photos.length === 0) { grid.innerHTML = `<div class="empty-state"><strong>No photos loaded</strong><span>Choose an input folder to build the thumbnail workspace.</span></div>`; renderInspector(); updatePhotoStats(); return; }
@@ -247,7 +290,7 @@ function renderPhotoGrid(): void {
   photos.forEach((photo, index) => {
     const tile = document.createElement("article");
     tile.className = `photo-tile${selectedPaths.has(photo.path) ? " selected" : ""}${photo.included ? "" : " excluded"}`; tile.draggable = sortMode === "manual"; tile.dataset.path = photo.path;
-    const preview = photo.browserPreviewable ? `<img src="${escapeHtml(convertFileSrc(photo.path))}" alt="" loading="lazy">` : `<div class="raw-placeholder"><span>${escapeHtml(photo.extension.toUpperCase())}</span><small>RAW</small></div>`;
+    const preview = photo.browserPreviewable ? `<img data-thumb-path="${escapeHtml(photo.path)}" data-thumb-version="${photo.modifiedMs ?? 0}:${photo.sizeBytes}" alt="" loading="lazy">` : `<div class="raw-placeholder"><span>${escapeHtml(photo.extension.toUpperCase())}</span><small>RAW</small></div>`;
     tile.innerHTML = `<label class="include-box" title="Include this frame"><input type="checkbox" ${photo.included ? "checked" : ""}><span></span></label><div class="thumb-wrap">${preview}<span class="order-badge">${index + 1}</span></div><div class="tile-copy"><strong title="${escapeHtml(photo.name)}">${escapeHtml(photo.name)}</strong><small>${formatBytes(photo.sizeBytes)} · ${escapeHtml(formatDate(photo.modifiedMs))}</small></div>`;
     tile.addEventListener("click", (event) => { if ((event.target as HTMLElement).closest(".include-box")) return; selectPhoto(index, event); });
     tile.querySelector<HTMLInputElement>(".include-box input")?.addEventListener("change", (event) => { photo.included = (event.target as HTMLInputElement).checked; renderPhotoGrid(); });
@@ -261,7 +304,7 @@ function renderPhotoGrid(): void {
 }
 async function scanPhotos(source = inputPath): Promise<void> { if (!source) { appendLog("Choose an input folder before scanning.", "stderr"); return; } qs<HTMLElement>("#photoSourcePath").textContent = "Scanning…"; try { const result = await invoke<PhotoInfo[]>("scan_photos", { input: source, recursive: qs<HTMLInputElement>("#workspaceRecursive").checked }); photos = result.map((photo) => ({ ...photo, included: true })); selectedPaths.clear(); selectionAnchor = null; sortMode = "manual"; qs<HTMLSelectElement>("#photoSort").value = "manual"; scannedInput = source; renderPhotoGrid(); appendLog(`Photo Workspace loaded ${photos.length} supported image(s).`); } catch (error) { photos = []; scannedInput = ""; renderPhotoGrid(); appendLog(String(error), "stderr"); } }
 async function pickInputFolder(andScan = false): Promise<void> { const value = await open({ directory: true, multiple: false, title: "Choose photo folder" }); if (typeof value !== "string") return; inputPath = value; setPath(inputPathEl, inputPath, "Choose a folder containing your night-sky photos"); qs<HTMLElement>("#photoSourcePath").textContent = inputPath; updateStartState(); if (andScan) { setSection("photos"); await scanPhotos(value); } }
-async function pickOutputFolder(): Promise<void> { const value = await open({ directory: true, multiple: false, title: "Choose output folder" }); if (typeof value !== "string") return; outputPath = value; setPath(outputPathEl, outputPath, "Choose where generated files should be saved"); updateStartState(); }
+async function pickOutputFolder(): Promise<void> { const value = await open({ directory: true, multiple: false, title: "Choose output folder" }); if (typeof value !== "string") return; setOutputPath(value); }
 
 function wireEvents(): void {
   document.querySelectorAll<HTMLButtonElement>(".section-tab").forEach((button) => button.addEventListener("click", () => setSection(button.dataset.section as Section)));
@@ -269,6 +312,7 @@ function wireEvents(): void {
   qs<HTMLButtonElement>("#pickInput").addEventListener("click", () => void pickInputFolder(false));
   qs<HTMLButtonElement>("#scanFromProcess").addEventListener("click", async () => { if (!inputPath) await pickInputFolder(true); else { setSection("photos"); await scanPhotos(); } });
   qs<HTMLButtonElement>("#pickOutput").addEventListener("click", () => void pickOutputFolder()); qs<HTMLButtonElement>("#openOutput").addEventListener("click", () => { if (outputPath) void openPath(outputPath); });
+  qs<HTMLButtonElement>("#workspacePickOutput").addEventListener("click", () => void pickOutputFolder()); qs<HTMLButtonElement>("#workspaceOpenOutput").addEventListener("click", () => { if (outputPath) void openPath(outputPath); });
   qs<HTMLButtonElement>("#chooseAndScan").addEventListener("click", () => void pickInputFolder(true)); qs<HTMLButtonElement>("#rescanPhotos").addEventListener("click", () => void scanPhotos(scannedInput || inputPath));
   qs<HTMLSelectElement>("#photoSort").addEventListener("change", (event) => sortPhotos((event.target as HTMLSelectElement).value as SortMode));
   qs<HTMLButtonElement>("#selectAllPhotos").addEventListener("click", () => { selectedPaths = new Set(photos.map((photo) => photo.path)); selectionAnchor = photos.length ? 0 : null; renderPhotoGrid(); });
