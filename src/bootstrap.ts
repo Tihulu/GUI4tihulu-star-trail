@@ -25,7 +25,7 @@ async function bootFeatures(): Promise<void> {
   await loadFeature("HardwareOptions", () => import("./hardware-options"));
   await loadFeature("EngineCompat", () => import("./engine-compat"));
   await loadFeature("ParameterInfo", () => import("./parameter-info"));
-  await loadFeature("PhotoThumbnailManager", () => import("./photo-thumbnail-manager"));
+  await loadFeature("PhotoThumbnailManager", () => import("./photo-thumbnail-manager-v2"));
   await loadFeature("StudioEditor", () => import("./studio-editor"));
   await loadFeature("StudioEditorSelectionSync", () => import("./studio-editor-selection-sync"));
   await loadFeature("WorkspaceImportBridge", () => import("./workspace-import-bridge"));
@@ -33,6 +33,7 @@ async function bootFeatures(): Promise<void> {
   // one physical drop creates exactly one group-history operation.
   await loadFeature("WorkspacePointerDrag", () => import("./workspace-pointer-drag"));
   await loadFeature("WorkspaceParity", () => import("./workspace-parity"));
+  await loadFeature("WorkspaceGroupTools", () => import("./workspace-group-tools"));
   await loadFeature("WorkspaceFilterGuard", () => import("./workspace-filter-guard"));
   await loadFeature("WorkflowPolish", () => import("./workflow-polish"));
   // LaunchStateSync runs after the visible selectors/output controls exist. It serializes
