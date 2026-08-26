@@ -313,16 +313,16 @@ function setupStudioEditor(
 
   async function renderPreview(path: string): Promise<void> {
     const generation = ++renderGeneration; const edit = beforeMode ? cloneEdit(DEFAULT_EDIT) : cloneEdit(edits.get(path) ?? DEFAULT_EDIT); editRenderMode.textContent = beforeMode ? "Before · original preview" : "Rendering edited preview…";
-    try { const rendered = await buildEditedCanvas(path, edit, 1200); if (generation !== renderGeneration) return; preview.innerHTML = ""; preview.append(rendered.canvas); editRenderMode.textContent = rendered.pixelEdited ? "Edited preview · pixel renderer" : "Edited preview · safe CSS fallback"; }
+    try { const rendered = await buildEditedCanvas(path, edit, 1200); if (generation !== renderGeneration) return; preview.innerHTML = ""; preview.append(rendered.canvas); editRenderMode.textContent = rendered.pixelEdited ? "Edited preview · pixel renderer" : "Edited preview · limited fallback"; }
     catch (error) { if (generation !== renderGeneration) return; preview.innerHTML = `<div class="studio-preview-empty error"><span>!</span><strong>Preview unavailable</strong><small>${escapeHtml(String(error))}</small></div>`; editRenderMode.textContent = "Preview failed"; }
   }
 
   async function buildEditedCanvas(path: string, edit: EditState, maxSide: number): Promise<{ canvas: HTMLCanvasElement; pixelEdited: boolean }> {
-    const image = await loadImage(convertFileSrc(path)); const sourceW = image.naturalWidth || image.width; const sourceH = image.naturalHeight || image.height; if (!sourceW || !sourceH) throw new Error("Image dimensions unavailable");
+    const image = await loadLocalImage(path); const sourceW = image.naturalWidth || image.width; const sourceH = image.naturalHeight || image.height; if (!sourceW || !sourceH) throw new Error("Image dimensions unavailable");
     const cropRect = centeredCrop(sourceW, sourceH, edit.crop); const scale = Math.min(1, maxSide / Math.max(cropRect.w, cropRect.h)); const baseW = Math.max(1, Math.round(cropRect.w * scale)); const baseH = Math.max(1, Math.round(cropRect.h * scale)); const radians = edit.rotation * Math.PI / 180; const absCos = Math.abs(Math.cos(radians)); const absSin = Math.abs(Math.sin(radians)); const outW = Math.max(1, Math.round(baseW * absCos + baseH * absSin)); const outH = Math.max(1, Math.round(baseW * absSin + baseH * absCos));
     const canvas = document.createElement("canvas"); canvas.width = outW; canvas.height = outH; const ctx = canvas.getContext("2d", { willReadFrequently: true }); if (!ctx) throw new Error("Canvas renderer unavailable");
     ctx.save(); ctx.translate(outW / 2, outH / 2); ctx.rotate(radians); ctx.drawImage(image, cropRect.x, cropRect.y, cropRect.w, cropRect.h, -baseW / 2, -baseH / 2, baseW, baseH); ctx.restore();
-    try { const frame = ctx.getImageData(0, 0, outW, outH); applyPixelEdits(frame.data, outW, outH, edit); ctx.putImageData(frame, 0, 0); return { canvas, pixelEdited: true }; } catch { canvas.style.filter = cssFallbackFilter(edit); return { canvas, pixelEdited: false }; }
+    try { const frame = ctx.getImageData(0, 0, outW, outH); applyPixelEdits(frame.data, outW, outH, edit); ctx.putImageData(frame, 0, 0); return { canvas, pixelEdited: true }; } catch (error) { console.warn("Studio Editor pixel renderer unavailable; using limited CSS fallback", error); canvas.style.filter = cssFallbackFilter(edit); return { canvas, pixelEdited: false }; }
   }
   function centeredCrop(width: number, height: number, crop: EditState["crop"]): { x: number; y: number; w: number; h: number } { if (crop === "original") return { x: 0, y: 0, w: width, h: height }; const [a, b] = crop.split(":").map(Number); const target = a / b; const current = width / height; if (current > target) { const w = height * target; return { x: (width - w) / 2, y: 0, w, h: height }; } const h = width / target; return { x: 0, y: (height - h) / 2, w: width, h }; }
 
@@ -334,10 +334,24 @@ function setupStudioEditor(
   function sharpen(data: Uint8ClampedArray, width: number, height: number, strength: number): void { const source = new Uint8ClampedArray(data); const a = Math.min(0.65, strength * 0.45); for (let y = 1; y < height - 1; y += 1) for (let x = 1; x < width - 1; x += 1) { const p = (y * width + x) * 4; for (let c = 0; c < 3; c += 1) { const center = source[p + c]; const neighbors = source[p - 4 + c] + source[p + 4 + c] + source[p - width * 4 + c] + source[p + width * 4 + c]; data[p + c] = clamp255(center * (1 + 4 * a) - neighbors * a); } } }
   function cssFallbackFilter(edit: EditState): string { const brightness = Math.max(0.1, Math.pow(2, edit.exposure * 0.35) * (1 + edit.brightness / 180)); const contrast = Math.max(0.1, 1 + edit.contrast / 100); const saturation = Math.max(0, 1 + edit.saturation / 100); const sepia = Math.abs(edit.warmth) / 350; const hue = edit.warmth >= 0 ? -edit.warmth * 0.12 : -edit.warmth * 0.06; return `brightness(${brightness}) contrast(${contrast}) saturate(${saturation}) sepia(${sepia}) hue-rotate(${hue}deg)`; }
   function loadImage(src: string): Promise<HTMLImageElement> { return new Promise((resolve, reject) => { const image = new Image(); image.decoding = "async"; image.onload = () => resolve(image); image.onerror = () => reject(new Error("Could not decode image")); image.src = src; }); }
+  async function loadLocalImage(path: string): Promise<HTMLImageElement> {
+    const assetUrl = convertFileSrc(path);
+    try {
+      const response = await fetch(assetUrl);
+      if (!response.ok) throw new Error(`Local image request failed (${response.status})`);
+      const blob = await response.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      try { return await loadImage(objectUrl); }
+      finally { URL.revokeObjectURL(objectUrl); }
+    } catch (error) {
+      console.warn("Studio Editor could not create an origin-clean local image; direct asset fallback may limit pixel edits", error);
+      return loadImage(assetUrl);
+    }
+  }
 
   async function exportPaths(paths: string[]): Promise<void> {
     if (paths.length === 0) { toast("No photos to export."); return; } const originalStatus = editRenderMode.textContent;
-    for (let index = 0; index < paths.length; index += 1) { const path = paths[index]; editRenderMode.textContent = `Exporting ${index + 1}/${paths.length}…`; try { const edit = edits.get(path) ?? DEFAULT_EDIT; const rendered = await buildEditedCanvas(path, edit, 3200); const blob = await canvasBlob(rendered.canvas, edit.jpegQuality / 100); const url = URL.createObjectURL(blob); const anchor = document.createElement("a"); anchor.href = url; anchor.download = `edited_${safeFileName(displayName(path)).replace(/\.[^.]+$/, "")}.jpg`; document.body.append(anchor); anchor.click(); anchor.remove(); window.setTimeout(() => URL.revokeObjectURL(url), 2000); await new Promise((resolve) => window.setTimeout(resolve, 120)); } catch (error) { toast(`Export failed for ${displayName(path)}: ${String(error)}`); } }
+    for (let index = 0; index < paths.length; index += 1) { const path = paths[index]; editRenderMode.textContent = `Exporting ${index + 1}/${paths.length}…`; try { const edit = edits.get(path) ?? DEFAULT_EDIT; const rendered = await buildEditedCanvas(path, edit, 3200); if (!rendered.pixelEdited && (edit.highlights !== 0 || edit.shadows !== 0 || edit.sharpness !== 0)) throw new Error("Pixel renderer is unavailable, so Highlights/Shadows/Sharpness cannot be exported safely."); const blob = await canvasBlob(rendered.canvas, edit.jpegQuality / 100); const url = URL.createObjectURL(blob); const anchor = document.createElement("a"); anchor.href = url; anchor.download = `edited_${safeFileName(displayName(path)).replace(/\.[^.]+$/, "")}.jpg`; document.body.append(anchor); anchor.click(); anchor.remove(); window.setTimeout(() => URL.revokeObjectURL(url), 2000); await new Promise((resolve) => window.setTimeout(resolve, 120)); } catch (error) { toast(`Export failed for ${displayName(path)}: ${String(error)}`); } }
     editRenderMode.textContent = originalStatus || "Export complete";
   }
   function canvasBlob(canvas: HTMLCanvasElement, quality: number): Promise<Blob> { return new Promise((resolve, reject) => canvas.toBlob((blob) => blob ? resolve(blob) : reject(new Error("JPEG export unavailable")), "image/jpeg", quality)); }
