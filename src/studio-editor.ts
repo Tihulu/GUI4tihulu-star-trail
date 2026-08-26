@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import "./studio-editor.css";
-import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+import { invoke } from "@tauri-apps/api/core";
 
 type GroupRecord = { id: string; name: string };
 type EditState = {
@@ -369,14 +369,15 @@ function setupStudioEditor(
 
   function schedulePreview(path: string): void { if (previewTimer !== null) window.clearTimeout(previewTimer); previewTimer = window.setTimeout(() => { previewTimer = null; void renderPreview(path); }, 45); }
   async function previewSource(path: string, maxSide: number): Promise<string> {
-    if (maxSide > 1600) return path;
+    const dimension = Math.max(1, Math.min(4096, Math.round(maxSide)));
     const tile = tiles().find((item) => item.dataset.path === path); const version = tile?.querySelector<HTMLImageElement>("img[data-thumb-path]")?.dataset.thumbVersion ?? "";
-    const result = await invoke<{ path: string }>("get_thumbnail", { sourcePath: path, maxWidth: maxSide, maxHeight: maxSide, sourceVersion: `editor:${version}` });
-    return result.path;
+    const result = await invoke<{ dataUrl: string }>("get_thumbnail", { sourcePath: path, maxWidth: dimension, maxHeight: dimension, sourceVersion: `editor-v2:${version}` });
+    if (!result.dataUrl?.startsWith("data:image/")) throw new Error("Native image decoder returned no preview data");
+    return result.dataUrl;
   }
   async function renderPreview(path: string): Promise<void> {
-    const generation = ++renderGeneration; const edit = beforeMode ? cloneEdit(DEFAULT_EDIT) : cloneEdit(edits.get(path) ?? DEFAULT_EDIT); editRenderMode.textContent = beforeMode ? "Before · original preview" : "Rendering edited preview…";
-    try { const rendered = await buildEditedCanvas(path, edit, 1200); if (generation !== renderGeneration) return; preview.innerHTML = ""; preview.append(rendered.canvas); editRenderMode.textContent = rendered.pixelEdited ? "Edited preview · pixel renderer" : "Edited preview · limited fallback"; }
+    const generation = ++renderGeneration; const edit = beforeMode ? cloneEdit(DEFAULT_EDIT) : cloneEdit(edits.get(path) ?? DEFAULT_EDIT); editRenderMode.textContent = beforeMode ? "Before · native preview" : "Rendering edited preview…";
+    try { const rendered = await buildEditedCanvas(path, edit, 1200); if (generation !== renderGeneration) return; preview.innerHTML = ""; preview.append(rendered.canvas); editRenderMode.textContent = rendered.pixelEdited ? "Edited preview · native pixel renderer" : "Edited preview · limited fallback"; }
     catch (error) { if (generation !== renderGeneration) return; preview.innerHTML = `<div class="studio-preview-empty error"><span>!</span><strong>Preview unavailable</strong><small>${escapeHtml(String(error))}</small></div>`; editRenderMode.textContent = "Preview failed"; }
   }
 
@@ -397,42 +398,19 @@ function setupStudioEditor(
   }
   function sharpen(data: Uint8ClampedArray, width: number, height: number, strength: number): void { const source = new Uint8ClampedArray(data); const a = Math.min(0.65, strength * 0.45); for (let y = 1; y < height - 1; y += 1) for (let x = 1; x < width - 1; x += 1) { const p = (y * width + x) * 4; for (let c = 0; c < 3; c += 1) { const center = source[p + c]; const neighbors = source[p - 4 + c] + source[p + 4 + c] + source[p - width * 4 + c] + source[p + width * 4 + c]; data[p + c] = clamp255(center * (1 + 4 * a) - neighbors * a); } } }
   function cssFallbackFilter(edit: EditState): string { const brightness = Math.max(0.1, Math.pow(2, edit.exposure * 0.35) * (1 + edit.brightness / 180)); const contrast = Math.max(0.1, 1 + edit.contrast / 100); const saturation = Math.max(0, 1 + edit.saturation / 100); const sepia = Math.abs(edit.warmth) / 350; const hue = edit.warmth >= 0 ? -edit.warmth * 0.12 : -edit.warmth * 0.06; return `brightness(${brightness}) contrast(${contrast}) saturate(${saturation}) sepia(${sepia}) hue-rotate(${hue}deg)`; }
-  function loadImage(src: string, timeoutMs = 8000): Promise<HTMLImageElement> {
+  function loadImage(src: string, timeoutMs = 10000): Promise<HTMLImageElement> {
     return new Promise((resolve, reject) => {
       const image = new Image(); image.decoding = "async";
       const timer = window.setTimeout(() => { image.onload = null; image.onerror = null; image.removeAttribute("src"); reject(new Error("Image decode timed out")); }, timeoutMs);
       image.onload = () => { window.clearTimeout(timer); image.onload = null; image.onerror = null; resolve(image); };
-      image.onerror = () => { window.clearTimeout(timer); image.onload = null; image.onerror = null; reject(new Error("Could not decode image")); };
+      image.onerror = () => { window.clearTimeout(timer); image.onload = null; image.onerror = null; reject(new Error("Could not decode native image preview")); };
       image.src = src;
     });
   }
-  function blobToDataUrl(blob: Blob): Promise<string> {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => typeof reader.result === "string" ? resolve(reader.result) : reject(new Error("Image data URL unavailable"));
-      reader.onerror = () => reject(reader.error ?? new Error("Could not read image blob"));
-      reader.readAsDataURL(blob);
-    });
-  }
-  async function loadLocalImage(path: string): Promise<LocalDrawable> {
-    const assetUrl = convertFileSrc(path); const controller = new AbortController(); const fetchTimer = window.setTimeout(() => controller.abort(), 8000);
-    try {
-      const response = await fetch(assetUrl, { signal: controller.signal });
-      if (!response.ok) throw new Error(`Local image request failed (${response.status})`);
-      const blob = await response.blob();
-      if (typeof createImageBitmap === "function") {
-        const bitmap = await createImageBitmap(blob);
-        return { source: bitmap, width: bitmap.width, height: bitmap.height, close: () => bitmap.close() };
-      }
-      const dataUrl = await blobToDataUrl(blob); const image = await loadImage(dataUrl);
-      return { source: image, width: image.naturalWidth || image.width, height: image.naturalHeight || image.height, close: () => image.removeAttribute("src") };
-    } catch (error) {
-      console.warn("Studio Editor could not create an origin-clean local drawable; direct asset fallback may limit pixel edits", error);
-      const image = await loadImage(assetUrl);
-      return { source: image, width: image.naturalWidth || image.width, height: image.naturalHeight || image.height, close: () => image.removeAttribute("src") };
-    } finally {
-      window.clearTimeout(fetchTimer);
-    }
+  async function loadLocalImage(dataUrl: string): Promise<LocalDrawable> {
+    if (!dataUrl.startsWith("data:image/")) throw new Error("Editor source is not native image data");
+    const image = await loadImage(dataUrl);
+    return { source: image, width: image.naturalWidth || image.width, height: image.naturalHeight || image.height, close: () => image.removeAttribute("src") };
   }
 
   async function exportPaths(paths: string[]): Promise<void> {
