@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
-const OLD_ENGINE_MESSAGE = "The installed tihulu engine is too old for separate CPU/GPU/GPU+CPU controls.";
+const CAPABILITY_MESSAGES = [
+  "The detected tihulu executable does not expose the required hardware-policy controls.",
+  "The installed tihulu engine is too old for separate CPU/GPU/GPU+CPU controls.",
+];
 let lastNotice = 0;
 
 function qs<T extends Element>(selector: string): T | null {
@@ -20,6 +23,10 @@ function toast(message: string): void {
   window.setTimeout(() => node?.classList.remove("show"), 5200);
 }
 
+function hasCapabilityMessage(text: string): boolean {
+  return CAPABILITY_MESSAGES.some((message) => text.includes(message));
+}
+
 function handleCapabilityMismatch(): void {
   const now = Date.now();
   if (now - lastNotice < 2500) return;
@@ -34,7 +41,7 @@ function install(): boolean {
   let previous = consoleBody.textContent ?? "";
   new MutationObserver(() => {
     const current = consoleBody.textContent ?? "";
-    if (current.includes(OLD_ENGINE_MESSAGE) && !previous.includes(OLD_ENGINE_MESSAGE)) handleCapabilityMismatch();
+    if (hasCapabilityMessage(current) && !hasCapabilityMessage(previous)) handleCapabilityMismatch();
     previous = current;
   }).observe(consoleBody, { childList: true, subtree: true, characterData: true });
   return true;
