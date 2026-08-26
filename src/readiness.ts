@@ -81,9 +81,9 @@ function openEngineUpdateDialog(): void {
     overlay.innerHTML = `
       <section class="engine-update-dialog" role="dialog" aria-modal="true" aria-labelledby="engineUpdateTitle">
         <div class="engine-update-head"><div><p>ENGINE COMPATIBILITY</p><h2 id="engineUpdateTitle">Update tihulu-star-trail</h2></div><button type="button" class="engine-update-close" aria-label="Close">×</button></div>
-        <p>The GUI hardware selectors require the current engine with <code>--group-hardware</code>, <code>--trail-hardware</code> and <code>--timelapse-hardware</code>. Re-running the one-line installer updates the engine and keeps the GUI current.</p>
+        <p>The GUI hardware selectors require a tihulu executable that exposes <code>--group-hardware</code>, <code>--trail-hardware</code> and <code>--timelapse-hardware</code>. Recheck first; update only when the detected executable is actually missing those controls.</p>
         <div class="engine-update-command"><code id="engineUpdateCommand"></code><button id="copyEngineUpdate" type="button">Copy</button></div>
-        <p class="engine-update-foot">Run the command in a terminal, reopen the app, then click <strong>Recheck</strong>. Existing source photos and projects are not modified.</p>
+        <p class="engine-update-foot">The installer prefers the current-user engine and refreshes the Linux app launcher so an older system <code>tihulu</code> cannot win PATH resolution. Reopen the app, then click <strong>Recheck</strong>. Existing source photos and projects are not modified.</p>
       </section>`;
     overlay.addEventListener("click", (event) => {
       if (event.target === overlay || (event.target as HTMLElement).closest(".engine-update-close")) overlay?.remove();
@@ -122,7 +122,7 @@ function install(): boolean {
     const row = document.createElement("div");
     row.id = "updateEngineHelp";
     row.className = "engine-update-row";
-    row.innerHTML = `<div><strong>Engine compatibility</strong><small>If CPU/GPU/GPU+CPU reports that tihulu is too old, update the installed engine and recheck.</small></div><button class="secondary-button fit" id="updateEngineButton" type="button">Update engine</button>`;
+    row.innerHTML = `<div><strong>Engine compatibility</strong><small>If a non-Auto hardware mode is rejected, recheck the detected tihulu executable first. Update only if that executable is missing the hardware-policy flags.</small></div><button class="secondary-button fit" id="updateEngineButton" type="button">Update engine</button>`;
     engineSection.append(row);
     qs<HTMLButtonElement>("#updateEngineButton")?.addEventListener("click", openEngineUpdateDialog);
   }
