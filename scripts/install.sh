@@ -160,6 +160,7 @@ case "$OS" in
     curl -fsSL "https://raw.githubusercontent.com/$GUI_REPO/main/app-icon.svg" -o "$ICON_PATH"
 
     APPIMAGE="$HOME/.local/bin/tihulu-star-trail-studio"
+    LAUNCHER="$HOME/.local/bin/tihulu-star-trail-studio-launcher"
     # Never stream into the currently running AppImage. Linux can report
     # ETXTBSY ("Text file busy") when an executing file is opened for write.
     # Download beside it, then atomically replace the directory entry instead.
@@ -170,12 +171,23 @@ case "$OS" in
     mv -f "$APPIMAGE_NEW" "$APPIMAGE"
     APPIMAGE_NEW=""
 
+    # Desktop/AppImage launches do not necessarily inherit the same PATH as an
+    # interactive shell. Put Tihulu's current-user launchers first so the GUI
+    # cannot accidentally resolve an older /usr/bin/tihulu before the engine
+    # that this installer just verified.
+    cat > "$LAUNCHER" <<EOF
+#!/usr/bin/env sh
+export PATH="$HOME/.local/share/gui4tihulu-star-trail/cli-venv/bin:$HOME/.local/bin:\$PATH"
+exec "$APPIMAGE" "\$@"
+EOF
+    chmod +x "$LAUNCHER"
+
     cat > "$HOME/.local/share/applications/tihulu-star-trail-studio.desktop" <<EOF
 [Desktop Entry]
 Type=Application
 Name=Tihulu Star Trail Studio
 Comment=Modern GUI for tihulu-star-trail
-Exec=$APPIMAGE
+Exec=$LAUNCHER
 Icon=$ICON_PATH
 Terminal=false
 Categories=Graphics;Photography;
@@ -183,7 +195,7 @@ StartupNotify=true
 EOF
     command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "$HOME/.local/share/applications" >/dev/null 2>&1 || true
     say "Installed Tihulu Star Trail Studio"
-    printf 'Launch from your app menu or run: %s\n' "$APPIMAGE"
+    printf 'Launch from your app menu or run: %s\n' "$LAUNCHER"
     ;;
 esac
 
