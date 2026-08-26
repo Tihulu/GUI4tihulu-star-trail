@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::hash_map::DefaultHasher,
@@ -748,6 +749,7 @@ fn start_job(
 #[serde(rename_all = "camelCase")]
 struct ThumbnailResult {
     path: String,
+    data_url: String,
     cache_hit: bool,
     source_bytes: u64,
 }
@@ -818,6 +820,85 @@ fn prune_thumbnail_cache(cache_dir: &Path) {
     }
 }
 
+fn thumbnail_helper_path(engine: &Path) -> Option<PathBuf> {
+    let parent = engine.parent()?;
+    #[cfg(windows)]
+    let names = ["tihulu-thumbnail.exe", "tihulu-thumbnail.cmd", "tihulu-thumbnail.bat"];
+    #[cfg(not(windows))]
+    let names = ["tihulu-thumbnail"];
+    for name in names {
+        let candidate = parent.join(name);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+fn render_thumbnail_with_engine(
+    source: &Path,
+    target: &Path,
+    max_width: u32,
+    max_height: u32,
+) -> Result<(), String> {
+    let engine = resolve_executable(None)?;
+    let helper = thumbnail_helper_path(&engine).ok_or_else(|| {
+        format!(
+            "RAW thumbnail helper is missing beside {}. Update tihulu-star-trail with the GUI installer.",
+            engine.display()
+        )
+    })?;
+    let stem = target
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("thumbnail");
+    let temporary = target.with_file_name(format!(".{stem}.engine.jpg"));
+    let _ = fs::remove_file(&temporary);
+    let mut command = Command::new(&helper);
+    command
+        .arg(source)
+        .arg(&temporary)
+        .args(["--max-width", &max_width.to_string()])
+        .args(["--max-height", &max_height.to_string()])
+        .args(["--jpeg-quality", "82"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    hide_console(&mut command);
+    let output = command
+        .output()
+        .map_err(|error| format!("Could not launch RAW thumbnail helper: {error}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let detail = if !stderr.is_empty() { stderr } else { stdout };
+        let _ = fs::remove_file(&temporary);
+        return Err(format!(
+            "RAW thumbnail helper exited with {}{}",
+            output.status,
+            if detail.is_empty() { String::new() } else { format!(": {detail}") }
+        ));
+    }
+    if !temporary.is_file() {
+        return Err("RAW thumbnail helper completed without producing a JPEG".into());
+    }
+    fs::rename(&temporary, target)
+        .or_else(|_| {
+            let _ = fs::remove_file(target);
+            fs::rename(&temporary, target)
+        })
+        .map_err(|error| format!("Could not finalize engine thumbnail: {error}"))
+}
+
+fn thumbnail_data_url(path: &Path) -> Result<String, String> {
+    let bytes = fs::read(path)
+        .map_err(|error| format!("Could not read cached thumbnail bytes: {error}"))?;
+    Ok(format!(
+        "data:image/jpeg;base64,{}",
+        BASE64_STANDARD.encode(bytes)
+    ))
+}
+
 fn generate_thumbnail(
     cache_dir: &Path,
     source: &Path,
@@ -840,6 +921,7 @@ fn generate_thumbnail(
     if target.is_file() {
         return Ok(ThumbnailResult {
             path: target.to_string_lossy().into_owned(),
+            data_url: String::new(),
             cache_hit: true,
             source_bytes: metadata.len(),
         });
@@ -852,35 +934,49 @@ fn generate_thumbnail(
     if target.is_file() {
         return Ok(ThumbnailResult {
             path: target.to_string_lossy().into_owned(),
+            data_url: String::new(),
             cache_hit: true,
             source_bytes: metadata.len(),
         });
     }
-    let image = image::ImageReader::open(source)
-        .map_err(|error| format!("Could not open thumbnail source: {error}"))?
-        .with_guessed_format()
-        .map_err(|error| format!("Could not detect image format: {error}"))?
-        .decode()
-        .map_err(|error| format!("Could not decode thumbnail source: {error}"))?;
-    let thumbnail = image.thumbnail(max_width, max_height).to_rgb8();
-    let temporary = target.with_extension("jpg.tmp");
-    {
-        let mut file = fs::File::create(&temporary)
-            .map_err(|error| format!("Could not create thumbnail cache file: {error}"))?;
-        let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut file, 82);
-        encoder
-            .encode_image(&thumbnail)
-            .map_err(|error| format!("Could not encode thumbnail: {error}"))?;
-    }
-    fs::rename(&temporary, &target)
-        .or_else(|_| {
-            let _ = fs::remove_file(&target);
+    let native_result: Result<(), String> = if RAW_EXTENSIONS.contains(&extension(source).as_str()) {
+        Err("RAW source requires the tihulu/rawpy decoder".into())
+    } else {
+        (|| {
+            let image = image::ImageReader::open(source)
+                .map_err(|error| format!("Could not open thumbnail source: {error}"))?
+                .with_guessed_format()
+                .map_err(|error| format!("Could not detect image format: {error}"))?
+                .decode()
+                .map_err(|error| format!("Could not decode thumbnail source: {error}"))?;
+            let thumbnail = image.thumbnail(max_width, max_height).to_rgb8();
+            let temporary = target.with_extension("jpg.tmp");
+            {
+                let mut file = fs::File::create(&temporary)
+                    .map_err(|error| format!("Could not create thumbnail cache file: {error}"))?;
+                let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut file, 82);
+                encoder
+                    .encode_image(&thumbnail)
+                    .map_err(|error| format!("Could not encode thumbnail: {error}"))?;
+            }
             fs::rename(&temporary, &target)
-        })
-        .map_err(|error| format!("Could not finalize thumbnail cache file: {error}"))?;
+                .or_else(|_| {
+                    let _ = fs::remove_file(&target);
+                    fs::rename(&temporary, &target)
+                })
+                .map_err(|error| format!("Could not finalize thumbnail cache file: {error}"))?;
+            Ok(())
+        })()
+    };
+    if let Err(native_error) = native_result {
+        render_thumbnail_with_engine(source, &target, max_width, max_height).map_err(|engine_error| {
+            format!("Native thumbnail decode failed ({native_error}); engine fallback failed: {engine_error}")
+        })?;
+    }
     prune_thumbnail_cache(cache_dir);
     Ok(ThumbnailResult {
         path: target.to_string_lossy().into_owned(),
+            data_url: String::new(),
         cache_hit: false,
         source_bytes: metadata.len(),
     })
@@ -901,11 +997,13 @@ async fn get_thumbnail(
         .join("thumbnails-v1");
     let source = PathBuf::from(source_path);
     let version = source_version.unwrap_or_default();
-    tauri::async_runtime::spawn_blocking(move || {
+    let mut result = tauri::async_runtime::spawn_blocking(move || {
         generate_thumbnail(&cache_dir, &source, max_width, max_height, &version)
     })
     .await
-    .map_err(|error| format!("Thumbnail worker failed: {error}"))?
+    .map_err(|error| format!("Thumbnail worker failed: {error}"))??;
+    result.data_url = thumbnail_data_url(Path::new(&result.path))?;
+    Ok(result)
 }
 
 #[tauri::command]
@@ -1158,6 +1256,9 @@ mod tests {
         let first = generate_thumbnail(&cache, &source, 160, 120, "v1").unwrap();
         assert!(!first.cache_hit);
         assert!(Path::new(&first.path).is_file());
+        assert!(thumbnail_data_url(Path::new(&first.path))
+            .unwrap()
+            .starts_with("data:image/jpeg;base64,"));
         let second = generate_thumbnail(&cache, &source, 160, 120, "v1").unwrap();
         assert!(second.cache_hit);
         assert_eq!(first.path, second.path);

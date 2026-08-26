@@ -1,6 +1,6 @@
 [package]
 name = "gui4tihulu-star-trail"
-version = "0.3.9"
+version = "0.3.10"
 description = "Modern cross-platform desktop GUI for tihulu-star-trail"
 authors = ["Tihulu contributors"]
 edition = "2024"
@@ -16,6 +16,7 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+base64 = "0.22"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "bmp", "tiff"] }
 tauri = { version = "2", features = ["protocol-asset"] }
 tauri-plugin-dialog = "2"

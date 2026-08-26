@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import "./performance.css";
-import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+import { invoke } from "@tauri-apps/api/core";
 
 const GRID_SIZE: [number, number] = [320, 240];
 const INSPECTOR_SIZE: [number, number] = [960, 720];
@@ -10,7 +10,7 @@ const MAX_FRONT_CACHE_ITEMS = 512;
 const PREFETCH_MARGIN = "220px 0px";
 const PERFORMANCE_MODE_THRESHOLD = 320;
 
-type ThumbnailResult = { path: string; cacheHit: boolean; sourceBytes: number };
+type ThumbnailResult = { path: string; dataUrl: string; cacheHit: boolean; sourceBytes: number };
 type QueueTask = { run: () => Promise<void> };
 
 const cache = new Map<string, string>();
@@ -50,7 +50,7 @@ async function thumbnailUrl(source: string, version: string, width: number, heig
   const pending = inFlight.get(key); if (pending) { metrics.deduped += 1; updateStats(); return pending; }
   metrics.requests += 1;
   const promise = invoke<ThumbnailResult>("get_thumbnail", { sourcePath: source, maxWidth: width, maxHeight: height, sourceVersion: version })
-    .then((result) => { if (result.cacheHit) metrics.hits += 1; else metrics.misses += 1; updateStats(); return put(key, convertFileSrc(result.path)); })
+    .then((result) => { if (result.cacheHit) metrics.hits += 1; else metrics.misses += 1; updateStats(); return put(key, result.dataUrl); })
     .finally(() => inFlight.delete(key));
   inFlight.set(key, promise); return promise;
 }
@@ -65,9 +65,9 @@ async function show(image: HTMLImageElement): Promise<void> {
   const version = image.dataset.thumbVersion ?? ""; const [width, height] = dimensions(image);
   try {
     const url = await thumbnailUrl(source, version, width, height);
-    if (workspaceActive && image.isConnected && visibleImages.has(image) && image.dataset.thumbPath === source) { image.src = url; image.dataset.thumbReady = "1"; }
+    if (workspaceActive && image.isConnected && visibleImages.has(image) && image.dataset.thumbPath === source) { image.src = url; image.dataset.thumbReady = "1"; image.style.visibility = "visible"; image.closest(".thumb-wrap")?.classList.remove("thumbnail-error"); }
   } catch (error) {
-    image.dataset.thumbError = String(error); image.removeAttribute("src");
+    image.dataset.thumbError = String(error); image.removeAttribute("src"); image.style.visibility = "hidden"; image.closest(".thumb-wrap")?.classList.add("thumbnail-error");
   }
 }
 
@@ -82,7 +82,7 @@ const visibility = new IntersectionObserver((entries) => {
 
 function manage(image: HTMLImageElement): void {
   if (!image.dataset.thumbPath) return;
-  image.loading = "lazy"; image.decoding = "async";
+  image.loading = "lazy"; image.decoding = "async"; if (image.dataset.thumbReady !== "1") image.style.visibility = "hidden";
   if (image.dataset.thumbManaged !== "1") { image.dataset.thumbManaged = "1"; image.removeAttribute("src"); }
   if (workspaceActive) visibility.observe(image);
 }
