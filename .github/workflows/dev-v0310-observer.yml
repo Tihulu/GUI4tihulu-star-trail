@@ -1,0 +1,34 @@
+name: Apply v0.3.10 workspace observer fix
+
+on:
+  push:
+    branches:
+      - fix/v0310-runtime-regressions
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Patch workspace observer
+        run: python3 scripts/fix-v0310-observer.py
+      - name: Format Rust hotfix
+        run: |
+          rustup component add rustfmt
+          cargo fmt --manifest-path src-tauri/Cargo.toml --all
+      - name: Shell syntax
+        run: sh -n scripts/install.sh
+      - name: Commit stable runtime source
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/studio-editor.ts src-tauri/src/lib.rs tests/source-regressions.test.mjs
+          git diff --cached --check
+          git commit -m "fix: stop workspace class mutations from rebuilding groups"
+          git push origin HEAD:fix/v0310-runtime-regressions
