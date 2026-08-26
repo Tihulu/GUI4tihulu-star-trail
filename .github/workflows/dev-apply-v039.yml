@@ -47,6 +47,8 @@ jobs:
           components: rustfmt
       - name: Apply implementation patch
         run: python3 scripts/apply-v039.py
+      - name: Apply cargo and stress-test fixes
+        run: python3 scripts/fix-v039-stage2.py
       - name: Install frontend dependencies
         run: npm install --no-package-lock
       - name: Generate native icon set
