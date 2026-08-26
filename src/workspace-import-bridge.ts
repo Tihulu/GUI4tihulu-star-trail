@@ -2,6 +2,13 @@
 
 type ResolvedGroup = { name: string; paths: string[] };
 type GroupsResolvedDetail = { groups: ResolvedGroup[]; source: string; output: string };
+type GroupRecord = { id: string; name: string };
+type StudioState = {
+  version: 1;
+  groups: GroupRecord[];
+  assignments: Array<[string, string | null]>;
+  edits: Array<[string, unknown]>;
+};
 type LiveGroup = { id: string; name: string; paths: string[] };
 
 let importing = false;
@@ -14,147 +21,172 @@ function normalizePath(value: string): string {
   return value.replace(/\\/g, "/").replace(/\/+$/, "").toLocaleLowerCase();
 }
 
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => window.setTimeout(resolve, ms));
+function storageKey(source: string): string {
+  return `tihulu-studio-v1:${source}`;
 }
 
 function tiles(): HTMLElement[] {
   return Array.from(document.querySelectorAll<HTMLElement>("#photoGrid .photo-tile[data-path]"));
 }
 
-function groupCards(): HTMLElement[] {
-  return Array.from(document.querySelectorAll<HTMLElement>("#studioGroupList .studio-group-card[data-group-id]"));
-}
-
-function clearTileSelection(): void {
-  for (const tile of tiles()) tile.classList.remove("selected");
-}
-
-function selectTilePaths(paths: string[]): number {
-  const wanted = new Set(paths);
-  let matched = 0;
-  for (const tile of tiles()) {
-    const path = tile.dataset.path;
-    const selected = Boolean(path && wanted.has(path));
-    tile.classList.toggle("selected", selected);
-    if (selected) matched += 1;
-  }
-  return matched;
-}
-
-async function clearExistingGroups(): Promise<void> {
-  const originalConfirm = window.confirm;
-  window.confirm = () => true;
+function readExistingState(source: string): StudioState | null {
   try {
-    for (let guard = 0; guard < 512; guard += 1) {
-      const card = qs<HTMLElement>("#studioGroupList .studio-group-card[data-group-id]");
-      if (!card) break;
-      card.querySelector<HTMLButtonElement>(".group-open")?.click();
-      await delay(0);
-      qs<HTMLButtonElement>("#studioDeleteGroup")?.click();
-      await delay(0);
-    }
-  } finally {
-    window.confirm = originalConfirm;
+    const raw = localStorage.getItem(storageKey(source));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<StudioState>;
+    if (parsed.version !== 1) return null;
+    return {
+      version: 1,
+      groups: Array.isArray(parsed.groups) ? parsed.groups as GroupRecord[] : [],
+      assignments: Array.isArray(parsed.assignments) ? parsed.assignments as Array<[string, string | null]> : [],
+      edits: Array.isArray(parsed.edits) ? parsed.edits as Array<[string, unknown]> : [],
+    };
+  } catch {
+    return null;
   }
 }
 
-async function createEditorGroup(name: string, paths: string[]): Promise<string | null> {
-  qs<HTMLButtonElement>("#studioShowAll")?.click();
-  await delay(0);
-  clearTileSelection();
-  const matched = selectTilePaths(paths);
-  if (matched === 0) return null;
+function uniqueGroupName(name: string, groups: GroupRecord[]): string {
+  const base = name.trim() || `Group ${groups.length + 1}`;
+  const names = new Set(groups.map((group) => group.name.toLocaleLowerCase()));
+  if (!names.has(base.toLocaleLowerCase())) return base;
+  let index = 2;
+  while (names.has(`${base} ${index}`.toLocaleLowerCase())) index += 1;
+  return `${base} ${index}`;
+}
 
-  const beforeIds = new Set(groupCards().map((card) => card.dataset.groupId).filter((id): id is string => Boolean(id)));
-  const originalPrompt = window.prompt;
-  window.prompt = () => name;
-  try {
-    qs<HTMLButtonElement>("#studioNewGroup")?.click();
-  } finally {
-    window.prompt = originalPrompt;
-  }
-  await delay(0);
+function nextFrame(): Promise<void> {
+  return new Promise((resolve) => requestAnimationFrame(() => resolve()));
+}
 
-  const created = groupCards().find((card) => {
-    const id = card.dataset.groupId;
-    return Boolean(id && !beforeIds.has(id));
+function waitFor(predicate: () => boolean, timeoutMs: number): Promise<boolean> {
+  const started = performance.now();
+  return new Promise((resolve) => {
+    const tick = () => {
+      if (predicate()) { resolve(true); return; }
+      if (performance.now() - started >= timeoutMs) { resolve(false); return; }
+      window.setTimeout(tick, 40);
+    };
+    tick();
   });
-  return created?.dataset.groupId ?? null;
 }
 
-async function selectFirstGroupFrame(): Promise<void> {
-  const opener = qs<HTMLButtonElement>("#studioGroupList .studio-group-card[data-group-id] .group-open");
-  opener?.click();
-  await delay(0);
+function triggerStudioStructureSync(grid: HTMLElement): void {
+  const marker = document.createElement("span");
+  marker.hidden = true;
+  marker.dataset.studioImportMarker = "1";
+  grid.append(marker);
+  marker.remove();
+}
 
-  // Re-enter the main Photo Workspace selection model after the bridge's temporary
-  // class-only selection. This keeps inspector, multi-select and subsequent drag/drop
-  // behavior aligned with main.ts.
-  qs<HTMLButtonElement>("#clearPhotoSelection")?.click();
-  await delay(0);
-  const firstVisible = tiles().find((tile) => !tile.classList.contains("studio-group-hidden"));
-  firstVisible?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-  await delay(0);
+async function reloadStudioState(source: string, expectedGroups: number): Promise<boolean> {
+  const label = qs<HTMLElement>("#photoSourcePath");
+  const grid = qs<HTMLElement>("#photoGrid");
+  const list = qs<HTMLElement>("#studioGroupList");
+  if (!label || !grid || !list) return false;
+
+  // Hide only the transient reload. The group strip is horizontal; rebuilding it
+  // group-by-group makes the scrollbar thumb resize dozens/hundreds of times.
+  // Two hidden structural syncs let Studio Editor reload closure-local state and
+  // reveal only the final group list.
+  const oldLabelVisibility = label.style.visibility;
+  const oldListVisibility = list.style.visibility;
+  const oldPointerEvents = list.style.pointerEvents;
+  label.style.visibility = "hidden";
+  list.style.visibility = "hidden";
+  list.style.pointerEvents = "none";
+
+  try {
+    label.textContent = `${source}#atomic-engine-import`;
+    triggerStudioStructureSync(grid);
+    await nextFrame();
+    await nextFrame();
+
+    label.textContent = source;
+    triggerStudioStructureSync(grid);
+    const restored = await waitFor(
+      () => document.querySelectorAll("#studioGroupList .studio-group-card[data-group-id]").length === expectedGroups,
+      4000,
+    );
+    await nextFrame();
+    return restored;
+  } finally {
+    label.textContent = source;
+    label.style.visibility = oldLabelVisibility;
+    list.style.visibility = oldListVisibility;
+    list.style.pointerEvents = oldPointerEvents;
+  }
 }
 
 async function importResolvedGroups(detail: GroupsResolvedDetail): Promise<void> {
   if (importing) return;
   importing = true;
-  let importedSuccessfully = false;
   try {
     const sourceLabel = qs<HTMLElement>("#photoSourcePath")?.textContent?.trim() ?? "";
     if (!detail?.source || normalizePath(sourceLabel) !== normalizePath(detail.source)) return;
 
-    const available = new Set(tiles().map((tile) => tile.dataset.path).filter((path): path is string => Boolean(path)));
-    if (available.size === 0) return;
+    const sourcePaths = new Set(
+      tiles().map((tile) => tile.dataset.path).filter((path): path is string => Boolean(path)),
+    );
+    if (sourcePaths.size === 0) return;
 
-    const resolved = (detail.groups ?? [])
-      .map((group) => ({ name: group.name, paths: group.paths.filter((path) => available.has(path)) }))
-      .filter((group) => group.paths.length > 0);
-    if (resolved.length === 0) return;
-
-    await clearExistingGroups();
-    clearTileSelection();
+    const existing = readExistingState(detail.source);
+    const groups: GroupRecord[] = [];
+    const assignments = new Map<string, string | null>();
+    for (const path of sourcePaths) assignments.set(path, null);
 
     const liveGroups: LiveGroup[] = [];
-    let importedFrames = 0;
-    for (const group of resolved) {
-      const id = await createEditorGroup(group.name, group.paths);
-      if (id) {
-        liveGroups.push({ id, name: group.name, paths: [...group.paths] });
-        importedFrames += group.paths.length;
-      }
+    for (const resolved of detail.groups ?? []) {
+      const validPaths = resolved.paths.filter((path) => sourcePaths.has(path));
+      if (validPaths.length === 0) continue;
+      const group: GroupRecord = {
+        id: crypto.randomUUID(),
+        name: uniqueGroupName(resolved.name, groups),
+      };
+      groups.push(group);
+      for (const path of validPaths) assignments.set(path, group.id);
+      liveGroups.push({ id: group.id, name: group.name, paths: validPaths });
     }
 
-    clearTileSelection();
-    if (liveGroups.length !== resolved.length || importedFrames === 0) {
-      console.error(`[Tihulu Studio] imported ${liveGroups.length}/${resolved.length} engine groups into live Studio state`);
+    if (groups.length === 0) return;
+
+    // One state write replaces hundreds of simulated selection/new-group clicks.
+    localStorage.setItem(storageKey(detail.source), JSON.stringify({
+      version: 1,
+      groups,
+      assignments: [...assignments],
+      edits: existing?.edits ?? [],
+    } satisfies StudioState));
+
+    const restored = await reloadStudioState(detail.source, groups.length);
+    if (!restored) {
+      console.error("[Tihulu Studio] atomic engine-group import could not reload Studio state");
       return;
     }
 
-    // Publish the exact IDs created by Studio Editor before any debounced localStorage
-    // save. Consumers such as the filter guard can therefore preserve the active group
-    // immediately even if main.ts re-renders the photo grid in the same frame.
     window.dispatchEvent(new CustomEvent("tihulu:workspace-live-groups", {
       detail: { source: detail.source, groups: liveGroups },
     }));
 
-    await selectFirstGroupFrame();
-    importedSuccessfully = true;
+    // Open the first group once, after the complete list exists. This is the only
+    // intentional post-import group render and avoids incremental scrollbar churn.
+    qs<HTMLButtonElement>("#studioGroupList .studio-group-card[data-group-id] .group-open")?.click();
+    await nextFrame();
+
     window.dispatchEvent(new CustomEvent("tihulu:workspace-groups-imported", {
-      detail: { groups: liveGroups.length, frames: importedFrames, source: detail.source },
+      detail: {
+        groups: groups.length,
+        frames: [...assignments.values()].filter(Boolean).length,
+        source: detail.source,
+      },
     }));
   } finally {
-    // Temporary class-only selection is only cleanup for failed/partial imports. On a
-    // successful import keep the first real frame selected so Previous/Next starts at 1/N.
-    if (!importedSuccessfully) clearTileSelection();
     importing = false;
   }
 }
 
-// Register before workspace-parity. The bridge only performs the one-time engine
-// result import; Studio Editor remains the owner of group state and all later edits.
+// Register before workspace-parity. This bridge is the single owner of the
+// engine-result import so two import implementations can never race each other.
 window.addEventListener("tihulu:engine-groups-resolved", (event) => {
   event.stopImmediatePropagation();
   const detail = (event as CustomEvent<GroupsResolvedDetail>).detail;
