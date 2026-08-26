@@ -64,6 +64,61 @@ engine_gpu_ready() {
   "$ENGINE_DIR/tihulu-hardware" --mode gpu >/dev/null 2>&1
 }
 
+wrap_managed_engine_launcher() {
+  VENV="$HOME/.local/share/gui4tihulu-star-trail/cli-venv"
+  NAME="$1"
+  LAUNCHER="$VENV/bin/$NAME"
+  REAL="$VENV/bin/.${NAME}-gui4tihulu-real"
+  [ -f "$LAUNCHER" ] || return 0
+
+  # A pip reinstall replaces our wrapper with a fresh console script. In that
+  # case refresh the saved real launcher. If the marker is still present this
+  # launcher is already safe and must not be wrapped a second time.
+  if grep -q 'GUI4TIHULU_APPIMAGE_SAFE_WRAPPER' "$LAUNCHER" 2>/dev/null; then
+    return 0
+  fi
+  rm -f "$REAL"
+  mv "$LAUNCHER" "$REAL"
+  cat > "$LAUNCHER" <<EOF
+#!/usr/bin/env sh
+# GUI4TIHULU_APPIMAGE_SAFE_WRAPPER
+# linuxdeploy/AppImage injects Python and shared-library paths for the bundled
+# GUI. Those paths must never leak into the host Python venv used by tihulu.
+if [ -n "\${APPDIR:-}" ] || [ -n "\${APPIMAGE:-}" ]; then
+  unset PYTHONHOME PYTHONPATH LD_LIBRARY_PATH QT_PLUGIN_PATH PERLLIB GST_PLUGIN_SYSTEM_PATH
+  unset GTK_DATA_PREFIX GTK_EXE_PREFIX GTK_PATH GTK_IM_MODULE_FILE GDK_PIXBUF_MODULE_FILE
+  unset GIO_EXTRA_MODULES GSETTINGS_SCHEMA_DIR GTK_THEME GDK_BACKEND XDG_DATA_DIRS
+
+  clean_path=""
+  old_ifs="\$IFS"
+  IFS=:
+  for entry in \${PATH:-}; do
+    case "\$entry" in
+      "\${APPDIR:-}"|"\${APPDIR:-}"/*) ;;
+      *)
+        if [ -z "\$clean_path" ]; then clean_path="\$entry"; else clean_path="\$clean_path:\$entry"; fi
+        ;;
+    esac
+  done
+  IFS="\$old_ifs"
+  export PATH="$VENV/bin:$HOME/.local/bin:\$clean_path"
+fi
+exec "$REAL" "\$@"
+EOF
+  chmod +x "$LAUNCHER"
+}
+
+install_appimage_safe_engine_wrappers() {
+  [ "$OS" = "Linux" ] || return 0
+  [ -d "$HOME/.local/share/gui4tihulu-star-trail/cli-venv/bin" ] || return 0
+  wrap_managed_engine_launcher tihulu
+  wrap_managed_engine_launcher tihulu-hardware
+  wrap_managed_engine_launcher tihulu-thumbnail
+  ln -sf "$HOME/.local/share/gui4tihulu-star-trail/cli-venv/bin/tihulu" "$HOME/.local/bin/tihulu"
+  ln -sf "$HOME/.local/share/gui4tihulu-star-trail/cli-venv/bin/tihulu-hardware" "$HOME/.local/bin/tihulu-hardware"
+  ln -sf "$HOME/.local/share/gui4tihulu-star-trail/cli-venv/bin/tihulu-thumbnail" "$HOME/.local/bin/tihulu-thumbnail"
+}
+
 install_engine_fallback() {
   PYTHON=""
   if command -v python3 >/dev/null 2>&1; then PYTHON="$(command -v python3)"; fi
@@ -87,12 +142,6 @@ install_engine_fallback() {
   "$VENV/bin/python" -m pip install --upgrade pip setuptools wheel
   "$VENV/bin/python" -m pip install --upgrade --force-reinstall "tihulu-star-trail[video] @ https://github.com/$ENGINE_REPO/archive/refs/heads/main.zip"
 
-  # Repair launchers immediately after the engine install. This also recovers a
-  # missing/broken ~/.local/bin wrapper from older Debian installs.
-  ln -sf "$VENV/bin/tihulu" "$HOME/.local/bin/tihulu"
-  ln -sf "$VENV/bin/tihulu-hardware" "$HOME/.local/bin/tihulu-hardware"
-  ln -sf "$VENV/bin/tihulu-thumbnail" "$HOME/.local/bin/tihulu-thumbnail"
-
   if command -v nvidia-smi >/dev/null 2>&1; then
     CUDA_MAJOR="$(nvidia-smi 2>/dev/null | sed -n 's/.*CUDA Version: \([0-9][0-9]*\).*/\1/p' | head -n 1)"
     "$VENV/bin/python" -m pip uninstall -y cupy cupy-cuda11x cupy-cuda12x cupy-cuda13x >/dev/null 2>&1 || true
@@ -104,6 +153,8 @@ install_engine_fallback() {
       "$VENV/bin/python" -m pip install --upgrade "cupy-cuda12x[ctk]>=14,<15"
     fi
   fi
+
+  install_appimage_safe_engine_wrappers
 }
 
 install_current_engine() {
@@ -129,6 +180,11 @@ else
   say "Installed tihulu engine is missing the required runtime or GPU backend — updating it"
   install_current_engine
 fi
+
+# Even when the engine was already current, repair the managed launchers so an
+# existing v0.3.10/v0.3.11 AppImage cannot poison host Python with AppImage's
+# PYTHONHOME/PYTHONPATH/LD_LIBRARY_PATH values.
+install_appimage_safe_engine_wrappers
 
 ENGINE_PATH="$(find_tihulu 2>/dev/null || true)"
 [ -n "$ENGINE_PATH" ] || fail "tihulu-star-trail installation finished but the tihulu launcher was not found."
