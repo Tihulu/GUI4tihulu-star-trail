@@ -14,6 +14,10 @@ function activeMode(): Mode {
   return value === "group" || value === "trail" || value === "timelapse" ? value : "run";
 }
 
+function hasActiveGroup(): boolean {
+  return Boolean(qs<HTMLElement>(".studio-group-card.active[data-group-id]"));
+}
+
 function activateQuickMode(mode: QuickMode): void {
   const useSelection = qs<HTMLInputElement>("#useWorkspaceSelection");
   if (useSelection && !useSelection.disabled) {
@@ -30,8 +34,6 @@ function validOutputStem(value: string): boolean {
 }
 
 function installOutputNames(): void {
-  // render-options.ts replaces the old legacy sections with these visible cards.
-  // Prefer those cards so custom names never end up inside hidden legacy markup.
   const trailCard = qs<HTMLElement>("#trailOptionsCard");
   const timelapseCard = qs<HTMLElement>("#timelapseOptionsCard");
 
@@ -82,11 +84,9 @@ function installWorkspaceQuickActions(): void {
 }
 
 function forceAllFramesExcluded(): void {
+  if (!hasActiveGroup()) return;
   const allIncluded = qs<HTMLInputElement>("#allIncluded");
   if (!allIncluded) return;
-  // The main workspace handler applies the checkbox value to every frame. Force a
-  // checked -> click transition so it deterministically becomes false even if a
-  // previous partial selection left the aggregate checkbox unchecked.
   allIncluded.checked = true;
   allIncluded.click();
 }
@@ -96,8 +96,6 @@ function installGroupQuickActions(): void {
   const processButton = qs<HTMLButtonElement>("#studioUseGroup");
   if (!footer || !processButton || qs("#studioTrailGroup")) return;
 
-  // The original handler only cleared outside frames when allIncluded happened to
-  // be checked. Always clear first so "this group" truly means this group only.
   processButton.addEventListener("click", forceAllFramesExcluded, { capture: true });
 
   const actions = document.createElement("div");
@@ -118,6 +116,10 @@ function installGroupQuickActions(): void {
   footer.append(actions);
 
   const useGroup = (mode: QuickMode): void => {
+    if (!hasActiveGroup()) {
+      processButton.click();
+      return;
+    }
     qs<HTMLButtonElement>(`.mode-tab[data-mode="${mode}"]`)?.click();
     processButton.click();
   };
@@ -138,9 +140,6 @@ function installLinkModeHelp(): void {
   const root = qs<HTMLElement>("#linkMode");
   if (!root || qs("#linkModeHelp")) return;
 
-  // main.ts defaults to symlink on Unix/macOS and copy on Windows. The old static
-  // markup always painted Copy as selected, so the visible state could disagree
-  // with the actual value sent to tihulu. Trigger the real button handler once.
   const initial: LinkMode = navigator.userAgent.includes("Windows") ? "copy" : "symlink";
   root.querySelector<HTMLButtonElement>(`button[data-value="${initial}"]`)?.click();
 
@@ -177,8 +176,6 @@ function installModeRequestGuard(): void {
       snapshot.push([input, input.value]);
       input.value = safeValue;
     }
-    // main.ts creates the request synchronously in its click listener. Restore the
-    // hidden fields immediately afterwards so switching modes does not lose settings.
     queueMicrotask(() => snapshot.forEach(([input, value]) => { input.value = value; }));
   }, { capture: true });
 }
