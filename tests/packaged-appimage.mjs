@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { createConnection } from "node:net";
 import { resolve } from "node:path";
 import { spawn } from "node:child_process";
 import { Builder, By, Capabilities, until } from "selenium-webdriver";
@@ -20,8 +19,6 @@ for (const [label, value] of [
   assert.ok(value && existsSync(value), `${label} must point to an existing path: ${value}`);
 }
 
-// A real local source for packaged thumbnail/editor IPC. This is intentionally tiny;
-// the acceptance target is native decode/cache/WebView transport rather than image quality.
 const previewSource = resolve(inputDir, "acceptance-preview.png");
 writeFileSync(
   previewSource,
@@ -48,27 +45,6 @@ function withTimeout(promise, timeoutMs, label, onTimeout) {
   ]);
 }
 
-async function waitForPort(host, port, timeoutMs = 10000) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const connected = await new Promise((resolvePromise) => {
-      const socket = createConnection({ host, port });
-      const finish = (value) => {
-        socket.removeAllListeners();
-        socket.destroy();
-        resolvePromise(value);
-      };
-      socket.setTimeout(500);
-      socket.once("connect", () => finish(true));
-      socket.once("error", () => finish(false));
-      socket.once("timeout", () => finish(false));
-    });
-    if (connected) return;
-    await sleep(100);
-  }
-  throw new Error(`Timed out waiting for ${host}:${port}`);
-}
-
 async function waitForFile(path, timeoutMs = 10000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -90,8 +66,12 @@ try {
     console.error("tauri-driver failed to start", error);
   });
 
-  await waitForPort("127.0.0.1", 4444, 10000);
-  stage("tauri-driver is listening on 127.0.0.1:4444");
+  // Keep the startup sequence that has already proven reliable in v0.3.9.
+  // A raw TCP readiness probe can itself hit tauri-driver before its native
+  // WebKit backend is ready and create a false Connection refused race.
+  await sleep(1000);
+  assert.equal(tauriDriver.exitCode, null, "tauri-driver exited during startup grace period");
+  stage("tauri-driver startup grace period complete");
 
   const capabilities = new Capabilities();
   capabilities.set("tauri:options", { application });
@@ -103,7 +83,7 @@ try {
       .withCapabilities(capabilities)
       .usingServer("http://127.0.0.1:4444/")
       .build(),
-    20000,
+    30000,
     "WebDriver session creation",
     () => tauriDriver && !tauriDriver.killed && tauriDriver.kill("SIGTERM"),
   );
@@ -159,9 +139,6 @@ try {
   );
   stage("native thumbnail IPC passed");
 
-  // Exercise the actual Studio Editor packaged WebKit path. A synthetic workspace tile
-  // points at a real local PNG, then the editor must render a canvas through
-  // get_thumbnail.dataUrl without convertFileSrc/fetch decoding.
   stage("checking Photo Editor canvas");
   const editorPreview = await driver.executeAsyncScript(
     function installEditorTile(sourcePath, sourceRoot) {
@@ -172,17 +149,20 @@ try {
         done({ ok: false, error: "Photo Workspace DOM is unavailable" });
         return;
       }
+
       sourceLabel.textContent = sourceRoot;
       grid.innerHTML = "";
       const tile = document.createElement("article");
       tile.className = "photo-tile selected";
       tile.dataset.path = sourcePath;
+
       const thumbWrap = document.createElement("div");
       thumbWrap.className = "thumb-wrap";
       const image = document.createElement("img");
       image.dataset.thumbPath = sourcePath;
       image.dataset.thumbVersion = "packaged-editor-v0312";
       thumbWrap.append(image);
+
       const copy = document.createElement("div");
       copy.className = "tile-copy";
       const strong = document.createElement("strong");
@@ -216,9 +196,6 @@ try {
   assert.ok(editorPreview.width > 0 && editorPreview.height > 0, "Photo Editor canvas has invalid dimensions");
   stage(`Photo Editor canvas passed (${editorPreview.width}x${editorPreview.height})`);
 
-  // Stress the engine-group import contract without requiring hundreds of image files.
-  // Intermediate group-strip rebuilds are permitted only while the strip is hidden;
-  // the user must see the final 32-card layout once, not a resizing scrollbar loop.
   stage("checking atomic 32-group workspace import");
   const workspaceImport = await driver.executeAsyncScript(
     function exerciseAtomicImport(realPath, sourceRoot) {
@@ -256,7 +233,6 @@ try {
         grid.append(tile);
       }
 
-      // Let the Studio Editor finish its ordinary structure sync before observing import.
       setTimeout(() => {
         const visibleIntermediate = [];
         const observer = new MutationObserver(() => {
@@ -285,6 +261,7 @@ try {
             });
           }, 80);
         };
+
         window.addEventListener("tihulu:workspace-groups-imported", onImported, { once: true });
         window.dispatchEvent(new CustomEvent("tihulu:engine-groups-resolved", {
           detail: {
@@ -296,6 +273,7 @@ try {
             })),
           },
         }));
+
         setTimeout(() => finish({
           ok: false,
           error: "Atomic workspace import timed out",
@@ -386,6 +364,7 @@ try {
     "#trailHardwarePolicyEffective",
     "#timelapseHardwarePolicyEffective",
   ].map(async (selector) => driver.findElement(By.css(selector)).getText()));
+
   console.log("Packaged thumbnail data URL verified:", String(thumbnailResult.value.dataUrl).slice(0, 32));
   console.log("Packaged Photo Editor canvas verified:", `${editorPreview.width}x${editorPreview.height}`);
   console.log("Atomic workspace import verified: 32 groups with no visible intermediate churn");
