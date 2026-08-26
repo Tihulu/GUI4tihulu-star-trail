@@ -19,6 +19,17 @@ for (const [label, value] of [
   assert.ok(value && existsSync(value), `${label} must point to an existing path: ${value}`);
 }
 
+// A real local source for packaged thumbnail IPC. This is intentionally tiny; the
+// acceptance target is native decode/cache/WebView transport rather than performance.
+const previewSource = resolve(inputDir, "acceptance-preview.png");
+writeFileSync(
+  previewSource,
+  Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAFElEQVR4nGP4z8DAwMDAxMDAwMAAAAwBAf8B9QAAAABJRU5ErkJggg==",
+    "base64",
+  ),
+);
+
 const sleep = (ms) => new Promise((resolvePromise) => setTimeout(resolvePromise, ms));
 
 async function waitForFile(path, timeoutMs = 10000) {
@@ -55,6 +66,41 @@ try {
   await driver.wait(until.elementLocated(By.css("#groupHardwarePolicyEffective")), 15000);
   await driver.wait(until.elementLocated(By.css("#trailHardwarePolicyEffective")), 15000);
   await driver.wait(until.elementLocated(By.css("#timelapseHardwarePolicyEffective")), 15000);
+
+  const pulseModuleState = await driver.executeScript(
+    "return document.documentElement.dataset.moduleStudioEditorSelectionSync || null;",
+  );
+  assert.equal(pulseModuleState, null, "obsolete selection-pulse module loaded in packaged app");
+
+  const thumbnailResult = await driver.executeAsyncScript(
+    function invokeThumbnail(sourcePath) {
+      const done = arguments[arguments.length - 1];
+      const invoke = window.__TAURI_INTERNALS__?.invoke;
+      if (typeof invoke !== "function") {
+        done({ ok: false, error: "Tauri IPC bridge is unavailable in packaged app" });
+        return;
+      }
+      Promise.resolve(invoke("get_thumbnail", {
+        sourcePath,
+        maxWidth: 96,
+        maxHeight: 72,
+        sourceVersion: "packaged-acceptance-v0310",
+      }))
+        .then((value) => done({ ok: true, value }))
+        .catch((error) => done({ ok: false, error: String(error) }));
+    },
+    previewSource,
+  );
+  assert.equal(thumbnailResult?.ok, true, thumbnailResult?.error || "get_thumbnail failed");
+  assert.match(
+    String(thumbnailResult.value?.dataUrl || ""),
+    /^data:image\/jpeg;base64,/, 
+    "packaged thumbnail IPC did not return a bounded JPEG data URL",
+  );
+  assert.ok(
+    existsSync(String(thumbnailResult.value?.path || "")),
+    "packaged thumbnail cache file was not created",
+  );
 
   const request = {
     command: "run",
@@ -123,6 +169,7 @@ try {
     "#trailHardwarePolicyEffective",
     "#timelapseHardwarePolicyEffective",
   ].map(async (selector) => driver.findElement(By.css(selector)).getText()));
+  console.log("Packaged thumbnail data URL verified:", String(thumbnailResult.value.dataUrl).slice(0, 32));
   console.log("Packaged AppImage acceptance passed:", commandDisplay);
   console.log("Effective backend labels:", effective.join(" | "));
 } catch (error) {
