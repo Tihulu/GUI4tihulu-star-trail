@@ -27,6 +27,12 @@ type StudioState = {
   assignments: Array<[string, string | null]>;
   edits: Array<[string, EditState]>;
 };
+type LocalDrawable = {
+  source: CanvasImageSource;
+  width: number;
+  height: number;
+  close: () => void;
+};
 
 const DEFAULT_EDIT: EditState = {
   exposure: 0,
@@ -286,10 +292,12 @@ function setupStudioEditor(
   function selectedPrimary(): string | null { const selected = selectedPaths(); if (selected.length) return selected[0]; if (activeGroupId) return groupPaths(activeGroupId)[0] ?? null; return allPaths()[0] ?? null; }
   function renderEditorForSelection(): void {
     const primary = selectedPrimary();
-    if (primary !== currentPrimaryPath) { currentPrimaryPath = primary; const state = primary ? cloneEdit(edits.get(primary) ?? DEFAULT_EDIT) : cloneEdit(DEFAULT_EDIT); editHistory = [state]; editHistoryIndex = 0; setControlsFromEdit(state); }
+    const primaryChanged = primary !== currentPrimaryPath;
+    if (primaryChanged) { currentPrimaryPath = primary; const state = primary ? cloneEdit(edits.get(primary) ?? DEFAULT_EDIT) : cloneEdit(DEFAULT_EDIT); editHistory = [state]; editHistoryIndex = 0; setControlsFromEdit(state); }
     updateEditButtons();
     if (!primary) { preview.innerHTML = `<div class="studio-preview-empty"><span>✦</span><strong>Select a photo</strong><small>The first selected frame becomes the edit preview.</small></div>`; editName.textContent = "No frame selected"; editRenderMode.textContent = "Preview idle"; return; }
-    editName.textContent = `${displayName(primary)}${selectedPaths().length > 1 ? ` · ${selectedPaths().length} selected` : ""}`; void renderPreview(primary);
+    editName.textContent = `${displayName(primary)}${selectedPaths().length > 1 ? ` · ${selectedPaths().length} selected` : ""}`;
+    if (primaryChanged || !preview.querySelector("canvas")) void renderPreview(primary);
   }
 
   function currentEditFromControls(): EditState {
@@ -318,10 +326,11 @@ function setupStudioEditor(
   }
 
   async function buildEditedCanvas(path: string, edit: EditState, maxSide: number): Promise<{ canvas: HTMLCanvasElement; pixelEdited: boolean }> {
-    const image = await loadLocalImage(path); const sourceW = image.naturalWidth || image.width; const sourceH = image.naturalHeight || image.height; if (!sourceW || !sourceH) throw new Error("Image dimensions unavailable");
+    const image = await loadLocalImage(path); const sourceW = image.width; const sourceH = image.height; if (!sourceW || !sourceH) { image.close(); throw new Error("Image dimensions unavailable"); }
     const cropRect = centeredCrop(sourceW, sourceH, edit.crop); const scale = Math.min(1, maxSide / Math.max(cropRect.w, cropRect.h)); const baseW = Math.max(1, Math.round(cropRect.w * scale)); const baseH = Math.max(1, Math.round(cropRect.h * scale)); const radians = edit.rotation * Math.PI / 180; const absCos = Math.abs(Math.cos(radians)); const absSin = Math.abs(Math.sin(radians)); const outW = Math.max(1, Math.round(baseW * absCos + baseH * absSin)); const outH = Math.max(1, Math.round(baseW * absSin + baseH * absCos));
-    const canvas = document.createElement("canvas"); canvas.width = outW; canvas.height = outH; const ctx = canvas.getContext("2d", { willReadFrequently: true }); if (!ctx) throw new Error("Canvas renderer unavailable");
-    ctx.save(); ctx.translate(outW / 2, outH / 2); ctx.rotate(radians); ctx.drawImage(image, cropRect.x, cropRect.y, cropRect.w, cropRect.h, -baseW / 2, -baseH / 2, baseW, baseH); ctx.restore();
+    const canvas = document.createElement("canvas"); canvas.width = outW; canvas.height = outH; const ctx = canvas.getContext("2d", { willReadFrequently: true }); if (!ctx) { image.close(); throw new Error("Canvas renderer unavailable"); }
+    try { ctx.save(); ctx.translate(outW / 2, outH / 2); ctx.rotate(radians); ctx.drawImage(image.source, cropRect.x, cropRect.y, cropRect.w, cropRect.h, -baseW / 2, -baseH / 2, baseW, baseH); ctx.restore(); }
+    finally { image.close(); }
     try { const frame = ctx.getImageData(0, 0, outW, outH); applyPixelEdits(frame.data, outW, outH, edit); ctx.putImageData(frame, 0, 0); return { canvas, pixelEdited: true }; } catch (error) { console.warn("Studio Editor pixel renderer unavailable; using limited CSS fallback", error); canvas.style.filter = cssFallbackFilter(edit); return { canvas, pixelEdited: false }; }
   }
   function centeredCrop(width: number, height: number, crop: EditState["crop"]): { x: number; y: number; w: number; h: number } { if (crop === "original") return { x: 0, y: 0, w: width, h: height }; const [a, b] = crop.split(":").map(Number); const target = a / b; const current = width / height; if (current > target) { const w = height * target; return { x: (width - w) / 2, y: 0, w, h: height }; } const h = width / target; return { x: 0, y: (height - h) / 2, w: width, h }; }
@@ -333,19 +342,41 @@ function setupStudioEditor(
   }
   function sharpen(data: Uint8ClampedArray, width: number, height: number, strength: number): void { const source = new Uint8ClampedArray(data); const a = Math.min(0.65, strength * 0.45); for (let y = 1; y < height - 1; y += 1) for (let x = 1; x < width - 1; x += 1) { const p = (y * width + x) * 4; for (let c = 0; c < 3; c += 1) { const center = source[p + c]; const neighbors = source[p - 4 + c] + source[p + 4 + c] + source[p - width * 4 + c] + source[p + width * 4 + c]; data[p + c] = clamp255(center * (1 + 4 * a) - neighbors * a); } } }
   function cssFallbackFilter(edit: EditState): string { const brightness = Math.max(0.1, Math.pow(2, edit.exposure * 0.35) * (1 + edit.brightness / 180)); const contrast = Math.max(0.1, 1 + edit.contrast / 100); const saturation = Math.max(0, 1 + edit.saturation / 100); const sepia = Math.abs(edit.warmth) / 350; const hue = edit.warmth >= 0 ? -edit.warmth * 0.12 : -edit.warmth * 0.06; return `brightness(${brightness}) contrast(${contrast}) saturate(${saturation}) sepia(${sepia}) hue-rotate(${hue}deg)`; }
-  function loadImage(src: string): Promise<HTMLImageElement> { return new Promise((resolve, reject) => { const image = new Image(); image.decoding = "async"; image.onload = () => resolve(image); image.onerror = () => reject(new Error("Could not decode image")); image.src = src; }); }
-  async function loadLocalImage(path: string): Promise<HTMLImageElement> {
-    const assetUrl = convertFileSrc(path);
+  function loadImage(src: string, timeoutMs = 8000): Promise<HTMLImageElement> {
+    return new Promise((resolve, reject) => {
+      const image = new Image(); image.decoding = "async";
+      const timer = window.setTimeout(() => { image.onload = null; image.onerror = null; image.removeAttribute("src"); reject(new Error("Image decode timed out")); }, timeoutMs);
+      image.onload = () => { window.clearTimeout(timer); image.onload = null; image.onerror = null; resolve(image); };
+      image.onerror = () => { window.clearTimeout(timer); image.onload = null; image.onerror = null; reject(new Error("Could not decode image")); };
+      image.src = src;
+    });
+  }
+  function blobToDataUrl(blob: Blob): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => typeof reader.result === "string" ? resolve(reader.result) : reject(new Error("Image data URL unavailable"));
+      reader.onerror = () => reject(reader.error ?? new Error("Could not read image blob"));
+      reader.readAsDataURL(blob);
+    });
+  }
+  async function loadLocalImage(path: string): Promise<LocalDrawable> {
+    const assetUrl = convertFileSrc(path); const controller = new AbortController(); const fetchTimer = window.setTimeout(() => controller.abort(), 8000);
     try {
-      const response = await fetch(assetUrl);
+      const response = await fetch(assetUrl, { signal: controller.signal });
       if (!response.ok) throw new Error(`Local image request failed (${response.status})`);
       const blob = await response.blob();
-      const objectUrl = URL.createObjectURL(blob);
-      try { return await loadImage(objectUrl); }
-      finally { URL.revokeObjectURL(objectUrl); }
+      if (typeof createImageBitmap === "function") {
+        const bitmap = await createImageBitmap(blob);
+        return { source: bitmap, width: bitmap.width, height: bitmap.height, close: () => bitmap.close() };
+      }
+      const dataUrl = await blobToDataUrl(blob); const image = await loadImage(dataUrl);
+      return { source: image, width: image.naturalWidth || image.width, height: image.naturalHeight || image.height, close: () => image.removeAttribute("src") };
     } catch (error) {
-      console.warn("Studio Editor could not create an origin-clean local image; direct asset fallback may limit pixel edits", error);
-      return loadImage(assetUrl);
+      console.warn("Studio Editor could not create an origin-clean local drawable; direct asset fallback may limit pixel edits", error);
+      const image = await loadImage(assetUrl);
+      return { source: image, width: image.naturalWidth || image.width, height: image.naturalHeight || image.height, close: () => image.removeAttribute("src") };
+    } finally {
+      window.clearTimeout(fetchTimer);
     }
   }
 
