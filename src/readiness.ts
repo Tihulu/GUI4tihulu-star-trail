@@ -9,6 +9,10 @@ const ACTIONS: Record<Mode, string> = {
   trail: "Render trails",
   timelapse: "Render timelapse",
 };
+const CAPABILITY_MESSAGES = [
+  "too old for separate CPU/GPU/GPU+CPU controls",
+  "does not expose the required hardware-policy controls",
+];
 
 function qs<T extends Element>(selector: string): T | null {
   return document.querySelector<T>(selector);
@@ -83,7 +87,7 @@ function openEngineUpdateDialog(): void {
         <div class="engine-update-head"><div><p>ENGINE COMPATIBILITY</p><h2 id="engineUpdateTitle">Update tihulu-star-trail</h2></div><button type="button" class="engine-update-close" aria-label="Close">×</button></div>
         <p>The GUI hardware selectors require a tihulu executable that exposes <code>--group-hardware</code>, <code>--trail-hardware</code> and <code>--timelapse-hardware</code>. Recheck first; update only when the detected executable is actually missing those controls.</p>
         <div class="engine-update-command"><code id="engineUpdateCommand"></code><button id="copyEngineUpdate" type="button">Copy</button></div>
-        <p class="engine-update-foot">The installer prefers the current-user engine and refreshes the Linux app launcher so an older system <code>tihulu</code> cannot win PATH resolution. Reopen the app, then click <strong>Recheck</strong>. Existing source photos and projects are not modified.</p>
+        <p class="engine-update-foot">The installer and app prefer the current-user engine before system copies. Reopen the app, then click <strong>Recheck</strong>. Existing source photos and projects are not modified.</p>
       </section>`;
     overlay.addEventListener("click", (event) => {
       if (event.target === overlay || (event.target as HTMLElement).closest(".engine-update-close")) overlay?.remove();
@@ -139,9 +143,8 @@ function install(): boolean {
   const consoleBody = qs<HTMLElement>("#consoleBody");
   if (consoleBody) {
     new MutationObserver(() => {
-      if (consoleBody.textContent?.includes("too old for separate CPU/GPU/GPU+CPU controls")) {
-        qs<HTMLElement>("#updateEngineHelp")?.classList.add("needs-update");
-      }
+      const text = consoleBody.textContent ?? "";
+      if (CAPABILITY_MESSAGES.some((message) => text.includes(message))) qs<HTMLElement>("#updateEngineHelp")?.classList.add("needs-update");
     }).observe(consoleBody, { childList: true, subtree: true, characterData: true });
   }
 
