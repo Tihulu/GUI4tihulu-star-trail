@@ -36,8 +36,9 @@ const stage = (message) => console.log(`[acceptance] ${new Date().toISOString()}
 
 function withTimeout(promise, timeoutMs, label, onTimeout) {
   let timer;
+  const normalized = Promise.resolve(promise);
   return Promise.race([
-    promise.finally(() => clearTimeout(timer)),
+    normalized.finally(() => clearTimeout(timer)),
     new Promise((_, reject) => {
       timer = setTimeout(() => {
         try { onTimeout?.(); } catch {}
