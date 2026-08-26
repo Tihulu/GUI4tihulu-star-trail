@@ -19,8 +19,8 @@ for (const [label, value] of [
   assert.ok(value && existsSync(value), `${label} must point to an existing path: ${value}`);
 }
 
-// A real local source for packaged thumbnail IPC. This is intentionally tiny; the
-// acceptance target is native decode/cache/WebView transport rather than performance.
+// A real local source for packaged thumbnail/editor IPC. This is intentionally tiny;
+// the acceptance target is native decode/cache/WebView transport rather than image quality.
 const previewSource = resolve(inputDir, "acceptance-preview.png");
 writeFileSync(
   previewSource,
@@ -61,11 +61,17 @@ try {
     .withCapabilities(capabilities)
     .usingServer("http://127.0.0.1:4444/")
     .build();
-  await driver.manage().setTimeouts({ script: 15000, implicit: 1000 });
+  await driver.manage().setTimeouts({ script: 20000, implicit: 1000 });
 
   await driver.wait(until.elementLocated(By.css("#groupHardwarePolicyEffective")), 15000);
   await driver.wait(until.elementLocated(By.css("#trailHardwarePolicyEffective")), 15000);
   await driver.wait(until.elementLocated(By.css("#timelapseHardwarePolicyEffective")), 15000);
+  await driver.wait(async () => {
+    const state = await driver.executeScript(
+      "return [document.documentElement.dataset.moduleStudioEditor, document.documentElement.dataset.moduleWorkspaceImportBridge];",
+    );
+    return Array.isArray(state) && state.every((value) => value === "ready");
+  }, 15000, "Studio Editor or workspace import bridge did not load in packaged app");
 
   const pulseModuleState = await driver.executeScript(
     "return document.documentElement.dataset.moduleStudioEditorSelectionSync || null;",
@@ -84,7 +90,7 @@ try {
         sourcePath,
         maxWidth: 96,
         maxHeight: 72,
-        sourceVersion: "packaged-acceptance-v0310",
+        sourceVersion: "packaged-acceptance-v0312",
       }))
         .then((value) => done({ ok: true, value }))
         .catch((error) => done({ ok: false, error: String(error) }));
@@ -100,6 +106,159 @@ try {
   assert.ok(
     existsSync(String(thumbnailResult.value?.path || "")),
     "packaged thumbnail cache file was not created",
+  );
+
+  // Exercise the actual Studio Editor packaged WebKit path. A synthetic workspace tile
+  // points at a real local PNG, then the editor must render a canvas through
+  // get_thumbnail.dataUrl without convertFileSrc/fetch decoding.
+  const editorPreview = await driver.executeAsyncScript(
+    function installEditorTile(sourcePath, sourceRoot) {
+      const done = arguments[arguments.length - 1];
+      const grid = document.querySelector("#photoGrid");
+      const sourceLabel = document.querySelector("#photoSourcePath");
+      if (!grid || !sourceLabel) {
+        done({ ok: false, error: "Photo Workspace DOM is unavailable" });
+        return;
+      }
+      sourceLabel.textContent = sourceRoot;
+      grid.innerHTML = "";
+      const tile = document.createElement("article");
+      tile.className = "photo-tile selected";
+      tile.dataset.path = sourcePath;
+      const thumbWrap = document.createElement("div");
+      thumbWrap.className = "thumb-wrap";
+      const image = document.createElement("img");
+      image.dataset.thumbPath = sourcePath;
+      image.dataset.thumbVersion = "packaged-editor-v0312";
+      thumbWrap.append(image);
+      const copy = document.createElement("div");
+      copy.className = "tile-copy";
+      const strong = document.createElement("strong");
+      strong.textContent = "acceptance-preview.png";
+      copy.append(strong);
+      tile.append(thumbWrap, copy);
+      grid.append(tile);
+
+      const deadline = Date.now() + 12000;
+      const poll = () => {
+        const canvas = document.querySelector("#studioEditPreview canvas");
+        if (canvas && canvas.width > 0 && canvas.height > 0) {
+          done({ ok: true, width: canvas.width, height: canvas.height });
+          return;
+        }
+        if (Date.now() >= deadline) {
+          done({
+            ok: false,
+            error: document.querySelector("#studioEditPreview")?.textContent?.trim() || "Photo Editor canvas timed out",
+          });
+          return;
+        }
+        setTimeout(poll, 100);
+      };
+      poll();
+    },
+    previewSource,
+    inputDir,
+  );
+  assert.equal(editorPreview?.ok, true, editorPreview?.error || "Photo Editor preview failed");
+  assert.ok(editorPreview.width > 0 && editorPreview.height > 0, "Photo Editor canvas has invalid dimensions");
+
+  // Stress the engine-group import contract without requiring hundreds of image files.
+  // Intermediate group-strip rebuilds are permitted only while the strip is hidden;
+  // the user must see the final 32-card layout once, not a resizing scrollbar loop.
+  const workspaceImport = await driver.executeAsyncScript(
+    function exerciseAtomicImport(realPath, sourceRoot) {
+      const done = arguments[arguments.length - 1];
+      const grid = document.querySelector("#photoGrid");
+      const sourceLabel = document.querySelector("#photoSourcePath");
+      const list = document.querySelector("#studioGroupList");
+      if (!grid || !sourceLabel || !list) {
+        done({ ok: false, error: "Workspace group DOM is unavailable" });
+        return;
+      }
+
+      sourceLabel.textContent = sourceRoot;
+      grid.innerHTML = "";
+      const paths = [];
+      const groupCount = 32;
+      for (let index = 0; index < groupCount; index += 1) {
+        const path = index === 0 ? realPath : `${sourceRoot}/acceptance-synthetic-${String(index).padStart(3, "0")}.jpg`;
+        paths.push(path);
+        const tile = document.createElement("article");
+        tile.className = "photo-tile";
+        tile.dataset.path = path;
+        const copy = document.createElement("div");
+        copy.className = "tile-copy";
+        const strong = document.createElement("strong");
+        strong.textContent = `frame-${index}`;
+        copy.append(strong);
+        if (index === 0) {
+          const image = document.createElement("img");
+          image.dataset.thumbPath = realPath;
+          image.dataset.thumbVersion = "packaged-group-v0312";
+          tile.append(image);
+        }
+        tile.append(copy);
+        grid.append(tile);
+      }
+
+      // Let the Studio Editor finish its ordinary structure sync before observing import.
+      setTimeout(() => {
+        const visibleIntermediate = [];
+        const observer = new MutationObserver(() => {
+          const count = list.querySelectorAll(".studio-group-card[data-group-id]").length;
+          if (count > 0 && count < groupCount && list.style.visibility !== "hidden") {
+            visibleIntermediate.push({ count, visibility: list.style.visibility, scrollWidth: list.scrollWidth });
+          }
+        });
+        observer.observe(list, { childList: true, subtree: true });
+
+        let settled = false;
+        const finish = (value) => {
+          if (settled) return;
+          settled = true;
+          observer.disconnect();
+          window.removeEventListener("tihulu:workspace-groups-imported", onImported);
+          done(value);
+        };
+        const onImported = () => {
+          setTimeout(() => {
+            finish({
+              ok: true,
+              finalCount: list.querySelectorAll(".studio-group-card[data-group-id]").length,
+              visibleIntermediate,
+              visibility: list.style.visibility,
+            });
+          }, 80);
+        };
+        window.addEventListener("tihulu:workspace-groups-imported", onImported, { once: true });
+        window.dispatchEvent(new CustomEvent("tihulu:engine-groups-resolved", {
+          detail: {
+            source: sourceRoot,
+            output: `${sourceRoot}/acceptance-output`,
+            groups: paths.map((path, index) => ({
+              name: `group_${String(index + 1).padStart(3, "0")}`,
+              paths: [path],
+            })),
+          },
+        }));
+        setTimeout(() => finish({
+          ok: false,
+          error: "Atomic workspace import timed out",
+          finalCount: list.querySelectorAll(".studio-group-card[data-group-id]").length,
+          visibleIntermediate,
+        }), 10000);
+      }, 350);
+    },
+    previewSource,
+    inputDir,
+  );
+  assert.equal(workspaceImport?.ok, true, workspaceImport?.error || "Atomic workspace import failed");
+  assert.equal(workspaceImport.finalCount, 32, "Packaged workspace did not render the final 32 engine groups");
+  assert.deepEqual(
+    workspaceImport.visibleIntermediate,
+    [],
+    "Group strip exposed intermediate card counts/scrollbar widths during atomic import",
   );
 
   const request = {
@@ -170,6 +329,8 @@ try {
     "#timelapseHardwarePolicyEffective",
   ].map(async (selector) => driver.findElement(By.css(selector)).getText()));
   console.log("Packaged thumbnail data URL verified:", String(thumbnailResult.value.dataUrl).slice(0, 32));
+  console.log("Packaged Photo Editor canvas verified:", `${editorPreview.width}x${editorPreview.height}`);
+  console.log("Atomic workspace import verified: 32 groups with no visible intermediate churn");
   console.log("Packaged AppImage acceptance passed:", commandDisplay);
   console.log("Effective backend labels:", effective.join(" | "));
 } catch (error) {
