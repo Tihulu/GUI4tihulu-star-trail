@@ -4,7 +4,8 @@ set -eu
 
 GUI_REPO="Tihulu/GUI4tihulu-star-trail"
 ENGINE_REPO="Tihulu/tihulu-star-trail"
-APP_ID="io.github.tihulu.gui4startrail"
+TAURI_IDENTIFIER="io.github.tihulu.gui4startrail"
+WAYLAND_APP_ID="gui4tihulu-star-trail"
 OS="$(uname -s)"
 ARCH="$(uname -m)"
 
@@ -25,9 +26,14 @@ case "$OS" in
 esac
 
 find_tihulu() {
-  # Prefer the GUI-managed/current-user engine over an older system package.
+  # Prefer the GUI-managed engine, but retain direct compatibility with the
+  # Debian installer used by older releases before relying on a launcher wrapper.
   if [ -x "$HOME/.local/share/gui4tihulu-star-trail/cli-venv/bin/tihulu" ]; then
     printf '%s\n' "$HOME/.local/share/gui4tihulu-star-trail/cli-venv/bin/tihulu"
+    return 0
+  fi
+  if [ -x "$HOME/tihulu-star-trail/.venv/bin/tihulu" ]; then
+    printf '%s\n' "$HOME/tihulu-star-trail/.venv/bin/tihulu"
     return 0
   fi
   if [ -x "$HOME/.local/bin/tihulu" ]; then
@@ -81,6 +87,12 @@ install_engine_fallback() {
   "$VENV/bin/python" -m pip install --upgrade pip setuptools wheel
   "$VENV/bin/python" -m pip install --upgrade --force-reinstall "tihulu-star-trail[video] @ https://github.com/$ENGINE_REPO/archive/refs/heads/main.zip"
 
+  # Repair launchers immediately after the engine install. This also recovers a
+  # missing/broken ~/.local/bin wrapper from older Debian installs.
+  ln -sf "$VENV/bin/tihulu" "$HOME/.local/bin/tihulu"
+  ln -sf "$VENV/bin/tihulu-hardware" "$HOME/.local/bin/tihulu-hardware"
+  ln -sf "$VENV/bin/tihulu-thumbnail" "$HOME/.local/bin/tihulu-thumbnail"
+
   if command -v nvidia-smi >/dev/null 2>&1; then
     CUDA_MAJOR="$(nvidia-smi 2>/dev/null | sed -n 's/.*CUDA Version: \([0-9][0-9]*\).*/\1/p' | head -n 1)"
     "$VENV/bin/python" -m pip uninstall -y cupy cupy-cuda11x cupy-cuda12x cupy-cuda13x >/dev/null 2>&1 || true
@@ -92,10 +104,6 @@ install_engine_fallback() {
       "$VENV/bin/python" -m pip install --upgrade "cupy-cuda12x[ctk]>=14,<15"
     fi
   fi
-
-  ln -sf "$VENV/bin/tihulu" "$HOME/.local/bin/tihulu"
-  ln -sf "$VENV/bin/tihulu-hardware" "$HOME/.local/bin/tihulu-hardware"
-  ln -sf "$VENV/bin/tihulu-thumbnail" "$HOME/.local/bin/tihulu-thumbnail"
 }
 
 install_current_engine() {
@@ -192,7 +200,7 @@ case "$OS" in
     mkdir -p "$HOME/.local/bin" "$HOME/.local/share/applications"
     ICON_DIR="$HOME/.local/share/icons/hicolor/scalable/apps"
     mkdir -p "$ICON_DIR"
-    ICON_PATH="$ICON_DIR/$APP_ID.svg"
+    ICON_PATH="$ICON_DIR/$WAYLAND_APP_ID.svg"
     curl -fsSL "https://raw.githubusercontent.com/$GUI_REPO/main/app-icon.svg" -o "$ICON_PATH"
 
     APPIMAGE="$HOME/.local/bin/tihulu-star-trail-studio"
@@ -213,26 +221,31 @@ case "$OS" in
     # that this installer just verified.
     cat > "$LAUNCHER" <<EOF
 #!/usr/bin/env sh
-export PATH="$HOME/.local/share/gui4tihulu-star-trail/cli-venv/bin:$HOME/.local/bin:\$PATH"
+export PATH="$HOME/.local/share/gui4tihulu-star-trail/cli-venv/bin:$HOME/tihulu-star-trail/.venv/bin:$HOME/.local/bin:\$PATH"
 exec "$APPIMAGE" "\$@"
 EOF
     chmod +x "$LAUNCHER"
 
+    # COSMIC/Wayland groups a running window by the AppImage's actual GTK/Wry
+    # app-id, which is the packaged binary name. Match Tauri's generated
+    # AppImage desktop entry instead of the reverse-DNS bundle identifier.
     rm -f "$HOME/.local/share/applications/tihulu-star-trail-studio.desktop"
-    DESKTOP_FILE="$HOME/.local/share/applications/$APP_ID.desktop"
+    rm -f "$HOME/.local/share/applications/$TAURI_IDENTIFIER.desktop"
+    DESKTOP_FILE="$HOME/.local/share/applications/$WAYLAND_APP_ID.desktop"
     cat > "$DESKTOP_FILE" <<EOF
 [Desktop Entry]
 Type=Application
 Name=Tihulu Star Trail Studio
 Comment=Modern GUI for tihulu-star-trail
 Exec=$LAUNCHER
-Icon=$ICON_PATH
-StartupWMClass=$APP_ID
-X-GNOME-WMClass=$APP_ID
+Icon=$WAYLAND_APP_ID
+StartupWMClass=$WAYLAND_APP_ID
+X-GNOME-WMClass=$WAYLAND_APP_ID
 Terminal=false
 Categories=Graphics;Photography;
 StartupNotify=true
 EOF
+    command -v gtk-update-icon-cache >/dev/null 2>&1 && gtk-update-icon-cache -f -t "$HOME/.local/share/icons/hicolor" >/dev/null 2>&1 || true
     command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "$HOME/.local/share/applications" >/dev/null 2>&1 || true
     say "Installed Tihulu Star Trail Studio"
     printf 'Launch from your app menu or run: %s\n' "$LAUNCHER"
