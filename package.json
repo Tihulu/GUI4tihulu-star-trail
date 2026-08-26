@@ -1,7 +1,7 @@
 {
   "name": "gui4tihulu-star-trail",
   "private": true,
-  "version": "0.3.8",
+  "version": "0.3.9",
   "description": "Modern cross-platform desktop GUI for tihulu-star-trail",
   "license": "AGPL-3.0-only",
   "type": "module",
@@ -9,6 +9,7 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "check": "tsc --noEmit",
+    "test": "node --experimental-strip-types --test tests/*.test.ts tests/*.test.mjs",
     "tauri": "tauri"
   },
   "dependencies": {

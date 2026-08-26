@@ -15,7 +15,41 @@ permissions:
   contents: write
 
 jobs:
+  quality:
+    name: TypeScript + Rust regression tests
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Install Linux prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev xdg-utils patchelf
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Install frontend dependencies
+        run: npm install
+      - name: Generate native icon set
+        run: npx tauri icon app-icon.svg
+      - name: Type-check frontend
+        run: npm run check
+      - name: Frontend regression tests
+        run: npm test
+      - name: Rust formatting
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+      - name: Rust unit tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+      - name: Rust check
+        run: cargo check --manifest-path src-tauri/Cargo.toml
+
   build:
+    needs: quality
     name: ${{ matrix.name }}
     strategy:
       fail-fast: false
@@ -88,10 +122,104 @@ jobs:
           path: ${{ matrix.asset }}
           if-no-files-found: error
 
+  appimage_acceptance:
+    name: Linux packaged AppImage acceptance
+    needs: build
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download packaged Linux AppImage
+        uses: actions/download-artifact@v4
+        with:
+          name: gui4tihulu-star-trail-Linux x86_64
+          path: packaged-linux
+
+      - name: Install packaged-runtime test prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y webkit2gtk-driver xvfb libwebkit2gtk-4.1-0 libgtk-3-0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install WebDriver client and tauri-driver
+        run: |
+          npm install --no-save --ignore-scripts selenium-webdriver
+          cargo install tauri-driver --locked
+
+      - name: Prepare strict hardware-policy acceptance engine
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/gui4tihulu-acceptance"
+          mkdir -p "$root/bin" "$root/input" "$root/output"
+          cat > "$root/bin/tihulu" <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          if [[ "${1:-}" == "--help" ]]; then
+            echo "tihulu-star-trail packaged acceptance engine"
+            exit 0
+          fi
+          if [[ "${1:-}" == "run" && "${2:-}" == "--help" ]]; then
+            printf '%s\n' \
+              'Usage: tihulu run [OPTIONS]' \
+              '  --group-hardware <auto|cpu|gpu|hybrid>' \
+              '  --trail-hardware <auto|cpu|gpu|hybrid>' \
+              '  --timelapse-hardware <auto|cpu|gpu|hybrid>'
+            exit 0
+          fi
+          printf '%s\n' "$@" > "${TIHULU_ACCEPTANCE_LOG:?}"
+          echo 'Grouping Hardware acceleration: NVIDIA CUDA'
+          echo 'Rendering star trail'
+          echo 'Hardware acceleration: NVIDIA CUDA'
+          echo 'timelapse'
+          echo 'Hardware acceleration: NVIDIA CUDA'
+          exit 0
+          EOF
+          chmod +x "$root/bin/tihulu"
+          appimage="$(find "$GITHUB_WORKSPACE/packaged-linux" -type f -name '*.AppImage' -print -quit)"
+          test -n "$appimage"
+          chmod +x "$appimage"
+          echo "APPIMAGE_PATH=$appimage" >> "$GITHUB_ENV"
+          echo "FAKE_TIHULU=$root/bin/tihulu" >> "$GITHUB_ENV"
+          echo "FAKE_BIN=$root/bin" >> "$GITHUB_ENV"
+          echo "ACCEPTANCE_INPUT_DIR=$root/input" >> "$GITHUB_ENV"
+          echo "ACCEPTANCE_OUTPUT_DIR=$root/output" >> "$GITHUB_ENV"
+          echo "TIHULU_ACCEPTANCE_LOG=$root/engine-argv.txt" >> "$GITHUB_ENV"
+          echo "ACCEPTANCE_SCREENSHOT=$root/appimage-acceptance.png" >> "$GITHUB_ENV"
+
+      - name: Run real packaged AppImage acceptance
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATH="$FAKE_BIN:$PATH"
+          export TAURI_WEBVIEW_AUTOMATION=1
+          export APPIMAGE_EXTRACT_AND_RUN=1
+          export WEBKIT_DISABLE_DMABUF_RENDERER=1
+          export LIBGL_ALWAYS_SOFTWARE=1
+          xvfb-run -a node tests/packaged-appimage.mjs
+
+      - name: Upload acceptance screenshot on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: appimage-acceptance-screenshot
+          path: ${{ env.ACCEPTANCE_SCREENSHOT }}
+          if-no-files-found: ignore
+
   publish:
     name: Publish GitHub Release
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: build
+    needs:
+      - build
+      - appimage_acceptance
     runs-on: ubuntu-22.04
     permissions:
       contents: write

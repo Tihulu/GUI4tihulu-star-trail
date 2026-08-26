@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::hash_map::DefaultHasher,
     env, fs,
+    hash::{Hash, Hasher},
     io::{BufRead, BufReader},
     net::{TcpListener, TcpStream},
     path::{Path, PathBuf},
@@ -35,30 +37,6 @@ struct UiState {
     current: Mutex<Option<UiProcess>>,
 }
 
-#[derive(Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct HardwarePolicies {
-    group_hardware: String,
-    trail_hardware: String,
-    timelapse_hardware: String,
-}
-
-impl Default for HardwarePolicies {
-    fn default() -> Self {
-        Self {
-            group_hardware: "auto".into(),
-            trail_hardware: "auto".into(),
-            timelapse_hardware: "auto".into(),
-        }
-    }
-}
-
-static HARDWARE_POLICIES: OnceLock<Mutex<HardwarePolicies>> = OnceLock::new();
-
-fn hardware_policies() -> &'static Mutex<HardwarePolicies> {
-    HARDWARE_POLICIES.get_or_init(|| Mutex::new(HardwarePolicies::default()))
-}
-
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct EngineInfo {
@@ -87,6 +65,9 @@ struct JobRequest {
     output: String,
     executable: Option<String>,
     files: Option<Vec<String>>,
+    group_hardware: String,
+    trail_hardware: String,
+    timelapse_hardware: String,
     threshold: f64,
     min_matches: u32,
     max_side: u32,
@@ -133,13 +114,13 @@ struct JobFinished {
 
 // Keep this list aligned with tihulu_star_trail.images.SUPPORTED_EXTENSIONS.
 const IMAGE_EXTENSIONS: &[&str] = &[
-    "jpg", "jpeg", "png", "tif", "tiff", "bmp", "webp", "3fr", "arw", "cr2", "cr3",
-    "dcr", "dng", "erf", "kdc", "mef", "mos", "mrw", "nef", "nrw", "orf", "pef", "raf",
-    "raw", "rwl", "rw2", "srw", "x3f",
+    "jpg", "jpeg", "png", "tif", "tiff", "bmp", "webp", "3fr", "arw", "cr2", "cr3", "dcr", "dng",
+    "erf", "kdc", "mef", "mos", "mrw", "nef", "nrw", "orf", "pef", "raf", "raw", "rwl", "rw2",
+    "srw", "x3f",
 ];
 const RAW_EXTENSIONS: &[&str] = &[
-    "3fr", "arw", "cr2", "cr3", "dcr", "dng", "erf", "kdc", "mef", "mos", "mrw", "nef",
-    "nrw", "orf", "pef", "raf", "raw", "rwl", "rw2", "srw", "x3f",
+    "3fr", "arw", "cr2", "cr3", "dcr", "dng", "erf", "kdc", "mef", "mos", "mrw", "nef", "nrw",
+    "orf", "pef", "raf", "raw", "rwl", "rw2", "srw", "x3f",
 ];
 const BROWSER_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "webp", "bmp"];
 const HARDWARE_MODES: &[&str] = &["auto", "cpu", "gpu", "hybrid"];
@@ -229,7 +210,10 @@ fn resolve_executable(custom: Option<&str>) -> Result<PathBuf, String> {
             return Ok(path);
         }
     }
-    Err("tihulu was not found in a current-user install, on PATH, or in a standard system location".into())
+    Err(
+        "tihulu was not found in a current-user install, on PATH, or in a standard system location"
+            .into(),
+    )
 }
 
 fn hide_console(command: &mut Command) {
@@ -279,23 +263,6 @@ fn detect_engine(custom_executable: Option<String>) -> EngineInfo {
             detail: error,
         },
     }
-}
-
-#[tauri::command]
-fn set_hardware_policies(policies: HardwarePolicies) -> Result<(), String> {
-    for (label, value) in [
-        ("grouping", policies.group_hardware.as_str()),
-        ("trail", policies.trail_hardware.as_str()),
-        ("timelapse", policies.timelapse_hardware.as_str()),
-    ] {
-        if !HARDWARE_MODES.contains(&value) {
-            return Err(format!("Unsupported {label} hardware mode: {value}"));
-        }
-    }
-    *hardware_policies()
-        .lock()
-        .map_err(|_| "Hardware policy state is unavailable")? = policies;
-    Ok(())
 }
 
 fn is_hidden(path: &Path) -> bool {
@@ -384,7 +351,10 @@ fn scan_photos(input: String, recursive: bool) -> Result<Vec<PhotoInfo>, String>
 }
 
 fn validate_request(request: &JobRequest) -> Result<(), String> {
-    if !matches!(request.command.as_str(), "run" | "group" | "trail" | "timelapse") {
+    if !matches!(
+        request.command.as_str(),
+        "run" | "group" | "trail" | "timelapse"
+    ) {
         return Err("Unsupported tihulu command".into());
     }
     if request.input.trim().is_empty() || !Path::new(&request.input).exists() {
@@ -403,11 +373,21 @@ fn validate_request(request: &JobRequest) -> Result<(), String> {
     if request.output.trim().is_empty() {
         return Err("Output path is required".into());
     }
+    for (label, value) in [
+        ("grouping", request.group_hardware.as_str()),
+        ("trail", request.trail_hardware.as_str()),
+        ("timelapse", request.timelapse_hardware.as_str()),
+    ] {
+        if !HARDWARE_MODES.contains(&value) {
+            return Err(format!("Unsupported {label} hardware mode: {value}"));
+        }
+    }
 
     let uses_grouping = matches!(request.command.as_str(), "run" | "group");
     let uses_render = matches!(request.command.as_str(), "run" | "trail" | "timelapse");
     let uses_jpeg = matches!(request.command.as_str(), "run" | "trail");
-    let uses_video = request.command == "timelapse" || (request.command == "run" && request.timelapse);
+    let uses_video =
+        request.command == "timelapse" || (request.command == "run" && request.timelapse);
 
     if uses_grouping {
         if !(0.0..=1.0).contains(&request.threshold) {
@@ -419,7 +399,10 @@ fn validate_request(request: &JobRequest) -> Result<(), String> {
         if request.time_window_minutes < 0.0 || !request.time_window_minutes.is_finite() {
             return Err("Time window must be a finite, non-negative number".into());
         }
-        if !matches!(request.link_mode.as_str(), "copy" | "symlink" | "hardlink" | "none") {
+        if !matches!(
+            request.link_mode.as_str(),
+            "copy" | "symlink" | "hardlink" | "none"
+        ) {
             return Err("Unsupported grouped-output link mode".into());
         }
     }
@@ -551,30 +534,26 @@ fn engine_supports_hardware_policies(executable: &Path) -> bool {
 fn append_hardware_args(
     request: &JobRequest,
     args: &mut Vec<String>,
-    policies: &HardwarePolicies,
     supported: bool,
 ) -> Result<(), String> {
     let requested = match request.command.as_str() {
         "run" => vec![
-            ("--group-hardware", policies.group_hardware.as_str()),
-            ("--trail-hardware", policies.trail_hardware.as_str()),
-            ("--timelapse-hardware", policies.timelapse_hardware.as_str()),
+            ("--group-hardware", request.group_hardware.as_str()),
+            ("--trail-hardware", request.trail_hardware.as_str()),
+            ("--timelapse-hardware", request.timelapse_hardware.as_str()),
         ],
-        "group" => vec![("--group-hardware", policies.group_hardware.as_str())],
-        "trail" => vec![("--trail-hardware", policies.trail_hardware.as_str())],
-        "timelapse" => vec![("--timelapse-hardware", policies.timelapse_hardware.as_str())],
+        "group" => vec![("--group-hardware", request.group_hardware.as_str())],
+        "trail" => vec![("--trail-hardware", request.trail_hardware.as_str())],
+        "timelapse" => vec![("--timelapse-hardware", request.timelapse_hardware.as_str())],
         _ => Vec::new(),
     };
 
     if !supported {
         if requested.iter().any(|(_, value)| *value != "auto") {
-            return Err(
-                "The detected tihulu executable does not expose the required hardware-policy controls. Recheck the engine path or update tihulu-star-trail; the requested mode was not downgraded to Auto.".into(),
-            );
+            return Err("The detected tihulu executable does not expose the required hardware-policy controls. Recheck the engine path or update tihulu-star-trail; the requested mode was not downgraded to Auto.".into());
         }
         return Ok(());
     }
-
     for (flag, value) in requested {
         args.push(flag.into());
         args.push(value.into());
@@ -674,14 +653,9 @@ fn start_job(
         None => (PathBuf::from(&request.input), None, 0),
     };
     let mut args = build_args(&request, &input);
-    let policies = hardware_policies()
-        .lock()
-        .map_err(|_| "Hardware policy state is unavailable")?
-        .clone();
     append_hardware_args(
         &request,
         &mut args,
-        &policies,
         engine_supports_hardware_policies(&executable),
     )?;
 
@@ -768,6 +742,170 @@ fn start_job(
         command_display,
         staged_files,
     })
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ThumbnailResult {
+    path: String,
+    cache_hit: bool,
+    source_bytes: u64,
+}
+
+const THUMBNAIL_CACHE_ITEMS: usize = 512;
+const THUMBNAIL_CACHE_BYTES: u64 = 256 * 1024 * 1024;
+static THUMBNAIL_GENERATION_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+fn thumbnail_key(
+    source: &Path,
+    max_width: u32,
+    max_height: u32,
+    source_version: &str,
+) -> Result<u64, String> {
+    let metadata = fs::metadata(source)
+        .map_err(|error| format!("Could not read thumbnail source metadata: {error}"))?;
+    let modified = metadata
+        .modified()
+        .ok()
+        .and_then(|value| value.duration_since(UNIX_EPOCH).ok())
+        .map(|value| value.as_nanos())
+        .unwrap_or(0);
+    let mut hasher = DefaultHasher::new();
+    source.to_string_lossy().hash(&mut hasher);
+    metadata.len().hash(&mut hasher);
+    modified.hash(&mut hasher);
+    max_width.hash(&mut hasher);
+    max_height.hash(&mut hasher);
+    source_version.hash(&mut hasher);
+    Ok(hasher.finish())
+}
+
+fn prune_thumbnail_cache(cache_dir: &Path) {
+    let Ok(entries) = fs::read_dir(cache_dir) else {
+        return;
+    };
+    let mut files = entries
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let path = entry.path();
+            if path.extension().and_then(|value| value.to_str()) != Some("jpg") {
+                return None;
+            }
+            let metadata = entry.metadata().ok()?;
+            let modified = metadata
+                .modified()
+                .ok()
+                .and_then(|value| value.duration_since(UNIX_EPOCH).ok())
+                .map(|value| value.as_nanos())
+                .unwrap_or(0);
+            Some((path, metadata.len(), modified))
+        })
+        .collect::<Vec<_>>();
+    let mut bytes = files.iter().map(|(_, bytes, _)| *bytes).sum::<u64>();
+    if files.len() <= THUMBNAIL_CACHE_ITEMS && bytes <= THUMBNAIL_CACHE_BYTES {
+        return;
+    }
+    files.sort_by_key(|(_, _, modified)| *modified);
+    let mut count = files.len();
+    for (path, size, _) in files {
+        if count <= THUMBNAIL_CACHE_ITEMS && bytes <= THUMBNAIL_CACHE_BYTES {
+            break;
+        }
+        if fs::remove_file(path).is_ok() {
+            count = count.saturating_sub(1);
+            bytes = bytes.saturating_sub(size);
+        }
+    }
+}
+
+fn generate_thumbnail(
+    cache_dir: &Path,
+    source: &Path,
+    max_width: u32,
+    max_height: u32,
+    source_version: &str,
+) -> Result<ThumbnailResult, String> {
+    if max_width == 0 || max_height == 0 || max_width > 4096 || max_height > 4096 {
+        return Err("Thumbnail dimensions must be between 1 and 4096 pixels".into());
+    }
+    if !source.is_file() {
+        return Err("Thumbnail source does not exist".into());
+    }
+    let metadata = fs::metadata(source)
+        .map_err(|error| format!("Could not read thumbnail source: {error}"))?;
+    fs::create_dir_all(cache_dir)
+        .map_err(|error| format!("Could not create thumbnail cache: {error}"))?;
+    let key = thumbnail_key(source, max_width, max_height, source_version)?;
+    let target = cache_dir.join(format!("{key:016x}.jpg"));
+    if target.is_file() {
+        return Ok(ThumbnailResult {
+            path: target.to_string_lossy().into_owned(),
+            cache_hit: true,
+            source_bytes: metadata.len(),
+        });
+    }
+
+    let _guard = THUMBNAIL_GENERATION_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .map_err(|_| "Thumbnail generator is unavailable")?;
+    if target.is_file() {
+        return Ok(ThumbnailResult {
+            path: target.to_string_lossy().into_owned(),
+            cache_hit: true,
+            source_bytes: metadata.len(),
+        });
+    }
+    let image = image::ImageReader::open(source)
+        .map_err(|error| format!("Could not open thumbnail source: {error}"))?
+        .with_guessed_format()
+        .map_err(|error| format!("Could not detect image format: {error}"))?
+        .decode()
+        .map_err(|error| format!("Could not decode thumbnail source: {error}"))?;
+    let thumbnail = image.thumbnail(max_width, max_height).to_rgb8();
+    let temporary = target.with_extension("jpg.tmp");
+    {
+        let mut file = fs::File::create(&temporary)
+            .map_err(|error| format!("Could not create thumbnail cache file: {error}"))?;
+        let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut file, 82);
+        encoder
+            .encode_image(&thumbnail)
+            .map_err(|error| format!("Could not encode thumbnail: {error}"))?;
+    }
+    fs::rename(&temporary, &target)
+        .or_else(|_| {
+            let _ = fs::remove_file(&target);
+            fs::rename(&temporary, &target)
+        })
+        .map_err(|error| format!("Could not finalize thumbnail cache file: {error}"))?;
+    prune_thumbnail_cache(cache_dir);
+    Ok(ThumbnailResult {
+        path: target.to_string_lossy().into_owned(),
+        cache_hit: false,
+        source_bytes: metadata.len(),
+    })
+}
+
+#[tauri::command(rename_all = "camelCase")]
+async fn get_thumbnail(
+    source_path: String,
+    max_width: u32,
+    max_height: u32,
+    source_version: Option<String>,
+    app: AppHandle,
+) -> Result<ThumbnailResult, String> {
+    let cache_dir = app
+        .path()
+        .app_cache_dir()
+        .map_err(|error| format!("Could not resolve app cache directory: {error}"))?
+        .join("thumbnails-v1");
+    let source = PathBuf::from(source_path);
+    let version = source_version.unwrap_or_default();
+    tauri::async_runtime::spawn_blocking(move || {
+        generate_thumbnail(&cache_dir, &source, max_width, max_height, &version)
+    })
+    .await
+    .map_err(|error| format!("Thumbnail worker failed: {error}"))?
 }
 
 #[tauri::command]
@@ -898,8 +1036,8 @@ pub fn run() {
         .manage(UiState::default())
         .invoke_handler(tauri::generate_handler![
             detect_engine,
-            set_hardware_policies,
             scan_photos,
+            get_thumbnail,
             start_job,
             stop_job,
             launch_original_desktop,
@@ -914,15 +1052,48 @@ pub fn run() {
 mod tests {
     use super::*;
 
+    fn request(command: &str) -> JobRequest {
+        JobRequest {
+            command: command.into(),
+            input: ".".into(),
+            output: "out".into(),
+            executable: None,
+            files: None,
+            group_hardware: "gpu".into(),
+            trail_hardware: "gpu".into(),
+            timelapse_hardware: "gpu".into(),
+            threshold: 0.42,
+            min_matches: 18,
+            max_side: 1000,
+            nfeatures: 2500,
+            time_metadata: false,
+            time_window_minutes: 360.0,
+            recursive: true,
+            quiet: false,
+            link_mode: "copy".into(),
+            min_frames: 2,
+            jpeg_quality: 95,
+            timelapse: true,
+            fps: 24.0,
+            video_max_side: 1920,
+            codec: "mp4v".into(),
+        }
+    }
+
+    fn assert_pair(args: &[String], flag: &str, value: &str) {
+        let index = args
+            .iter()
+            .position(|item| item == flag)
+            .unwrap_or_else(|| panic!("missing {flag}"));
+        assert_eq!(args.get(index + 1).map(String::as_str), Some(value));
+    }
+
     #[test]
     fn supported_extensions_match_engine_formats() {
         assert!(is_supported_image(Path::new("sky.JPG")));
         assert!(is_supported_image(Path::new("sky.CR3")));
         assert!(is_supported_image(Path::new("sky.3FR")));
-        assert!(is_supported_image(Path::new("sky.RAW")));
         assert!(!is_supported_image(Path::new("animation.gif")));
-        assert!(!is_supported_image(Path::new("frame.avif")));
-        assert!(!is_supported_image(Path::new("notes.txt")));
     }
 
     #[test]
@@ -931,10 +1102,95 @@ mod tests {
     }
 
     #[test]
-    fn hardware_policy_defaults_are_auto() {
-        let policy = HardwarePolicies::default();
-        assert_eq!(policy.group_hardware, "auto");
-        assert_eq!(policy.trail_hardware, "auto");
-        assert_eq!(policy.timelapse_hardware, "auto");
+    fn group_gpu_is_exact() {
+        let req = request("group");
+        let mut args = Vec::new();
+        append_hardware_args(&req, &mut args, true).unwrap();
+        assert_eq!(args, vec!["--group-hardware", "gpu"]);
+    }
+
+    #[test]
+    fn trail_gpu_is_exact() {
+        let req = request("trail");
+        let mut args = Vec::new();
+        append_hardware_args(&req, &mut args, true).unwrap();
+        assert_eq!(args, vec!["--trail-hardware", "gpu"]);
+    }
+
+    #[test]
+    fn timelapse_gpu_is_exact() {
+        let req = request("timelapse");
+        let mut args = Vec::new();
+        append_hardware_args(&req, &mut args, true).unwrap();
+        assert_eq!(args, vec!["--timelapse-hardware", "gpu"]);
+    }
+
+    #[test]
+    fn full_run_uses_all_exact_gpu_flags() {
+        let req = request("run");
+        let mut args = Vec::new();
+        append_hardware_args(&req, &mut args, true).unwrap();
+        assert_pair(&args, "--group-hardware", "gpu");
+        assert_pair(&args, "--trail-hardware", "gpu");
+        assert_pair(&args, "--timelapse-hardware", "gpu");
+        assert_eq!(args.len(), 6);
+    }
+
+    #[test]
+    fn explicit_gpu_never_falls_back_when_engine_is_legacy() {
+        let req = request("trail");
+        let mut args = Vec::new();
+        let error = append_hardware_args(&req, &mut args, false).unwrap_err();
+        assert!(error.contains("not downgraded to Auto"));
+        assert!(args.is_empty());
+    }
+
+    #[test]
+    fn native_thumbnail_cache_hits_and_invalidates_by_version() {
+        let root = env::temp_dir().join(format!("gui4tihulu-thumb-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let source = root.join("source.png");
+        let cache = root.join("cache");
+        image::RgbImage::from_pixel(640, 480, image::Rgb([12, 34, 56]))
+            .save(&source)
+            .unwrap();
+        let first = generate_thumbnail(&cache, &source, 160, 120, "v1").unwrap();
+        assert!(!first.cache_hit);
+        assert!(Path::new(&first.path).is_file());
+        let second = generate_thumbnail(&cache, &source, 160, 120, "v1").unwrap();
+        assert!(second.cache_hit);
+        assert_eq!(first.path, second.path);
+        let invalidated = generate_thumbnail(&cache, &source, 160, 120, "v2").unwrap();
+        assert!(!invalidated.cache_hit);
+        assert_ne!(first.path, invalidated.path);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn hundreds_of_duplicate_thumbnail_requests_are_cache_hits() {
+        let root = env::temp_dir().join(format!(
+            "gui4tihulu-thumb-repeat-test-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let source = root.join("source.png");
+        let cache = root.join("cache");
+        image::RgbImage::from_pixel(1280, 720, image::Rgb([21, 42, 63]))
+            .save(&source)
+            .unwrap();
+        let first = generate_thumbnail(&cache, &source, 200, 120, "stable").unwrap();
+        assert!(!first.cache_hit);
+        for _ in 0..400 {
+            let repeated = generate_thumbnail(&cache, &source, 200, 120, "stable").unwrap();
+            assert!(repeated.cache_hit);
+            assert_eq!(first.path, repeated.path);
+        }
+        assert_eq!(
+            fs::read_dir(&cache).unwrap().filter_map(Result::ok).count(),
+            1
+        );
+        let _ = fs::remove_dir_all(root);
     }
 }

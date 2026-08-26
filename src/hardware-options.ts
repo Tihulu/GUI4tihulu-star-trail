@@ -1,15 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import "./hardware-options.css";
-import { invoke } from "@tauri-apps/api/core";
 
 type HardwareMode = "auto" | "cpu" | "gpu" | "hybrid";
 type HardwareKind = "group" | "trail" | "timelapse";
-type HardwarePolicies = {
-  groupHardware: HardwareMode;
-  trailHardware: HardwareMode;
-  timelapseHardware: HardwareMode;
-};
-
 const INFO: Record<HardwareKind, { title: string; body: string }> = {
   group: {
     title: "Grouping compute",
@@ -45,16 +38,6 @@ function selector(id: string, kind: HardwareKind): string {
 function selected(id: string): HardwareMode {
   const value = qs<HTMLButtonElement>(`#${id} button.selected`)?.dataset.value;
   return value === "cpu" || value === "gpu" || value === "hybrid" ? value : "auto";
-}
-
-async function pushPolicies(): Promise<void> {
-  const policies: HardwarePolicies = {
-    groupHardware: selected("groupHardwarePolicy"),
-    trailHardware: selected("trailHardwarePolicy"),
-    timelapseHardware: selected("timelapseHardwarePolicy"),
-  };
-  try { await invoke("set_hardware_policies", { policies }); }
-  catch (error) { console.warn("Could not set hardware policies", error); }
 }
 
 function effectiveNode(kind: HardwareKind): HTMLElement | null {
@@ -127,7 +110,6 @@ function wireSegment(id: string): void {
       button.classList.add("selected");
       const status = qs<HTMLElement>(`#${id}Effective`);
       if (status) status.textContent = "Effective backend: run a job to verify";
-      void pushPolicies();
     });
   });
 }
@@ -169,9 +151,8 @@ function install(): boolean {
 
   ["groupHardwarePolicy", "trailHardwarePolicy", "timelapseHardwarePolicy"].forEach(wireSegment);
   document.querySelectorAll<HTMLButtonElement>("[data-hardware-info]").forEach((button) => button.addEventListener("click", () => showInfo(button.dataset.hardwareInfo as HardwareKind)));
-  qs<HTMLButtonElement>("#startJob")?.addEventListener("click", () => { resetEffectiveForActiveJob(); void pushPolicies(); }, true);
+  qs<HTMLButtonElement>("#startJob")?.addEventListener("click", resetEffectiveForActiveJob, true);
   installBackendObserver();
-  void pushPolicies();
   return true;
 }
 

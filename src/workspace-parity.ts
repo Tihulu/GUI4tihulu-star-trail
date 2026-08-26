@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import "./workspace-parity.css";
-import { convertFileSrc } from "@tauri-apps/api/core";
 
 type GroupRecord = { id: string; name: string };
 type StudioState = {
@@ -228,26 +227,23 @@ function updateFrameStatus(): void {
 }
 
 function addGroupThumbnails(): void {
-  const list = qs<HTMLElement>("#studioGroupList");
-  if (!list) return;
-  const state = readState();
-  const assignments = new Map(state?.assignments ?? []);
+  const list = qs<HTMLElement>("#studioGroupList"); if (!list) return;
+  const state = readState(); const assignments = new Map(state?.assignments ?? []);
+  const tileByPath = new Map(tiles().map((tile) => [tile.dataset.path ?? "", tile]));
+  const firstPreviewByGroup = new Map<string, { path: string; version: string }>();
+  for (const [path, groupId] of assignments) {
+    if (!groupId || firstPreviewByGroup.has(groupId)) continue;
+    const image = tileByPath.get(path)?.querySelector<HTMLImageElement>("img[data-thumb-path]");
+    if (image) firstPreviewByGroup.set(groupId, { path, version: image.dataset.thumbVersion ?? "" });
+  }
   for (const card of Array.from(list.querySelectorAll<HTMLElement>(".studio-group-card[data-group-id]"))) {
     const existing = card.querySelector<HTMLImageElement>(".workspace-group-thumb");
     if (!groupThumbsEnabled) { existing?.remove(); continue; }
-    const groupId = card.dataset.groupId;
-    if (!groupId) continue;
-    const path = [...assignments].find(([, id]) => id === groupId)?.[0];
-    if (!path) { existing?.remove(); continue; }
-    if (existing?.dataset.sourcePath === path) continue;
-    existing?.remove();
-    const thumb = document.createElement("img");
-    thumb.className = "workspace-group-thumb";
-    thumb.dataset.sourcePath = path;
-    thumb.src = convertFileSrc(path);
-    thumb.alt = "";
-    thumb.loading = "lazy";
-    card.prepend(thumb);
+    const groupId = card.dataset.groupId; const preview = groupId ? firstPreviewByGroup.get(groupId) : undefined;
+    if (!preview) { existing?.remove(); continue; }
+    if (existing?.dataset.thumbPath === preview.path && existing.dataset.thumbVersion === preview.version) continue;
+    existing?.remove(); const thumb = document.createElement("img"); thumb.className = "workspace-group-thumb";
+    thumb.dataset.thumbPath = preview.path; thumb.dataset.thumbVersion = preview.version; thumb.alt = ""; thumb.loading = "lazy"; thumb.decoding = "async"; card.prepend(thumb);
   }
 }
 
@@ -377,8 +373,8 @@ function install(): boolean {
       updateFrameStatus();
     });
   });
-  observer.observe(list, { childList: true, subtree: true, attributes: true, attributeFilter: ["class"] });
-  observer.observe(grid, { childList: true, subtree: true, attributes: true, attributeFilter: ["class"] });
+  observer.observe(list, { childList: true, subtree: true });
+  observer.observe(grid, { childList: true, subtree: true });
 
   window.addEventListener("tihulu:engine-groups-resolved", (event) => {
     const detail = (event as CustomEvent<GroupsResolvedDetail>).detail;

@@ -35,10 +35,6 @@ async function bootFeatures(): Promise<void> {
   await loadFeature("WorkspaceParity", () => import("./workspace-parity"));
   await loadFeature("WorkspaceFilterGuard", () => import("./workspace-filter-guard"));
   await loadFeature("WorkflowPolish", () => import("./workflow-polish"));
-  // LaunchStateSync runs after the visible selectors/output controls exist. It serializes
-  // the visible hardware policy before every launch and keeps Workspace on the same
-  // Process output-path state instead of introducing a second independent value.
-  await loadFeature("LaunchStateSync", () => import("./launch-state-sync"));
   await loadFeature("EngineGroupSync", () => import("./engine-group-sync"));
   await loadFeature("Readiness", () => import("./readiness"));
 
