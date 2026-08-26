@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::hash_map::DefaultHasher,
@@ -823,7 +823,11 @@ fn prune_thumbnail_cache(cache_dir: &Path) {
 fn thumbnail_helper_path(engine: &Path) -> Option<PathBuf> {
     let parent = engine.parent()?;
     #[cfg(windows)]
-    let names = ["tihulu-thumbnail.exe", "tihulu-thumbnail.cmd", "tihulu-thumbnail.bat"];
+    let names = [
+        "tihulu-thumbnail.exe",
+        "tihulu-thumbnail.cmd",
+        "tihulu-thumbnail.bat",
+    ];
     #[cfg(not(windows))]
     let names = ["tihulu-thumbnail"];
     for name in names {
@@ -876,7 +880,11 @@ fn render_thumbnail_with_engine(
         return Err(format!(
             "RAW thumbnail helper exited with {}{}",
             output.status,
-            if detail.is_empty() { String::new() } else { format!(": {detail}") }
+            if detail.is_empty() {
+                String::new()
+            } else {
+                format!(": {detail}")
+            }
         ));
     }
     if !temporary.is_file() {
@@ -939,7 +947,8 @@ fn generate_thumbnail(
             source_bytes: metadata.len(),
         });
     }
-    let native_result: Result<(), String> = if RAW_EXTENSIONS.contains(&extension(source).as_str()) {
+    let native_result: Result<(), String> = if RAW_EXTENSIONS.contains(&extension(source).as_str())
+    {
         Err("RAW source requires the tihulu/rawpy decoder".into())
     } else {
         (|| {
@@ -976,7 +985,7 @@ fn generate_thumbnail(
     prune_thumbnail_cache(cache_dir);
     Ok(ThumbnailResult {
         path: target.to_string_lossy().into_owned(),
-            data_url: String::new(),
+        data_url: String::new(),
         cache_hit: false,
         source_bytes: metadata.len(),
     })
@@ -1256,9 +1265,11 @@ mod tests {
         let first = generate_thumbnail(&cache, &source, 160, 120, "v1").unwrap();
         assert!(!first.cache_hit);
         assert!(Path::new(&first.path).is_file());
-        assert!(thumbnail_data_url(Path::new(&first.path))
-            .unwrap()
-            .starts_with("data:image/jpeg;base64,"));
+        assert!(
+            thumbnail_data_url(Path::new(&first.path))
+                .unwrap()
+                .starts_with("data:image/jpeg;base64,")
+        );
         let second = generate_thumbnail(&cache, &source, 160, 120, "v1").unwrap();
         assert!(second.cache_hit);
         assert_eq!(first.path, second.path);
