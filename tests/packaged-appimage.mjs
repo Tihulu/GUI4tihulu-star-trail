@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { createConnection } from "node:net";
 import { resolve } from "node:path";
 import { spawn } from "node:child_process";
 import { Builder, By, Capabilities, until } from "selenium-webdriver";
@@ -31,6 +32,41 @@ writeFileSync(
 );
 
 const sleep = (ms) => new Promise((resolvePromise) => setTimeout(resolvePromise, ms));
+const stage = (message) => console.log(`[acceptance] ${new Date().toISOString()} ${message}`);
+
+function withTimeout(promise, timeoutMs, label, onTimeout) {
+  let timer;
+  return Promise.race([
+    promise.finally(() => clearTimeout(timer)),
+    new Promise((_, reject) => {
+      timer = setTimeout(() => {
+        try { onTimeout?.(); } catch {}
+        reject(new Error(`${label} timed out after ${timeoutMs} ms`));
+      }, timeoutMs);
+    }),
+  ]);
+}
+
+async function waitForPort(host, port, timeoutMs = 10000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const connected = await new Promise((resolvePromise) => {
+      const socket = createConnection({ host, port });
+      const finish = (value) => {
+        socket.removeAllListeners();
+        socket.destroy();
+        resolvePromise(value);
+      };
+      socket.setTimeout(500);
+      socket.once("connect", () => finish(true));
+      socket.once("error", () => finish(false));
+      socket.once("timeout", () => finish(false));
+    });
+    if (connected) return;
+    await sleep(100);
+  }
+  throw new Error(`Timed out waiting for ${host}:${port}`);
+}
 
 async function waitForFile(path, timeoutMs = 10000) {
   const deadline = Date.now() + timeoutMs;
@@ -44,6 +80,7 @@ async function waitForFile(path, timeoutMs = 10000) {
 let driver;
 let tauriDriver;
 try {
+  stage("starting tauri-driver");
   tauriDriver = spawn(process.env.TAURI_DRIVER || "tauri-driver", [], {
     env: process.env,
     stdio: ["ignore", "inherit", "inherit"],
@@ -51,18 +88,28 @@ try {
   tauriDriver.on("error", (error) => {
     console.error("tauri-driver failed to start", error);
   });
-  await sleep(1000);
+
+  await waitForPort("127.0.0.1", 4444, 10000);
+  stage("tauri-driver is listening on 127.0.0.1:4444");
 
   const capabilities = new Capabilities();
   capabilities.set("tauri:options", { application });
   capabilities.setBrowserName("wry");
 
-  driver = await new Builder()
-    .withCapabilities(capabilities)
-    .usingServer("http://127.0.0.1:4444/")
-    .build();
+  stage("creating packaged Wry WebDriver session");
+  driver = await withTimeout(
+    new Builder()
+      .withCapabilities(capabilities)
+      .usingServer("http://127.0.0.1:4444/")
+      .build(),
+    20000,
+    "WebDriver session creation",
+    () => tauriDriver && !tauriDriver.killed && tauriDriver.kill("SIGTERM"),
+  );
+  stage("packaged Wry WebDriver session created");
   await driver.manage().setTimeouts({ script: 20000, implicit: 1000 });
 
+  stage("waiting for packaged application modules");
   await driver.wait(until.elementLocated(By.css("#groupHardwarePolicyEffective")), 15000);
   await driver.wait(until.elementLocated(By.css("#trailHardwarePolicyEffective")), 15000);
   await driver.wait(until.elementLocated(By.css("#timelapseHardwarePolicyEffective")), 15000);
@@ -72,12 +119,14 @@ try {
     );
     return Array.isArray(state) && state.every((value) => value === "ready");
   }, 15000, "Studio Editor or workspace import bridge did not load in packaged app");
+  stage("packaged application modules ready");
 
   const pulseModuleState = await driver.executeScript(
     "return document.documentElement.dataset.moduleStudioEditorSelectionSync || null;",
   );
   assert.equal(pulseModuleState, null, "obsolete selection-pulse module loaded in packaged app");
 
+  stage("checking native thumbnail IPC");
   const thumbnailResult = await driver.executeAsyncScript(
     function invokeThumbnail(sourcePath) {
       const done = arguments[arguments.length - 1];
@@ -107,10 +156,12 @@ try {
     existsSync(String(thumbnailResult.value?.path || "")),
     "packaged thumbnail cache file was not created",
   );
+  stage("native thumbnail IPC passed");
 
   // Exercise the actual Studio Editor packaged WebKit path. A synthetic workspace tile
   // points at a real local PNG, then the editor must render a canvas through
   // get_thumbnail.dataUrl without convertFileSrc/fetch decoding.
+  stage("checking Photo Editor canvas");
   const editorPreview = await driver.executeAsyncScript(
     function installEditorTile(sourcePath, sourceRoot) {
       const done = arguments[arguments.length - 1];
@@ -162,10 +213,12 @@ try {
   );
   assert.equal(editorPreview?.ok, true, editorPreview?.error || "Photo Editor preview failed");
   assert.ok(editorPreview.width > 0 && editorPreview.height > 0, "Photo Editor canvas has invalid dimensions");
+  stage(`Photo Editor canvas passed (${editorPreview.width}x${editorPreview.height})`);
 
   // Stress the engine-group import contract without requiring hundreds of image files.
   // Intermediate group-strip rebuilds are permitted only while the strip is hidden;
   // the user must see the final 32-card layout once, not a resizing scrollbar loop.
+  stage("checking atomic 32-group workspace import");
   const workspaceImport = await driver.executeAsyncScript(
     function exerciseAtomicImport(realPath, sourceRoot) {
       const done = arguments[arguments.length - 1];
@@ -260,6 +313,7 @@ try {
     [],
     "Group strip exposed intermediate card counts/scrollbar widths during atomic import",
   );
+  stage("atomic 32-group workspace import passed");
 
   const request = {
     command: "run",
@@ -287,6 +341,7 @@ try {
     codec: "mp4v",
   };
 
+  stage("checking start_job GPU policy contract");
   const result = await driver.executeAsyncScript(
     function invokeStartJob(jobRequest) {
       const done = arguments[arguments.length - 1];
@@ -313,7 +368,9 @@ try {
   for (const flag of ["--group-hardware", "--trail-hardware", "--timelapse-hardware"]) {
     assert.match(actualArgs, new RegExp(`(?:^|\\n)${flag}\\ngpu(?:\\n|$)`), `${flag} gpu missing from engine argv`);
   }
+  stage("start_job GPU policy contract passed");
 
+  stage("waiting for effective CUDA backend labels");
   await driver.wait(async () => {
     const values = await Promise.all([
       "#groupHardwarePolicyEffective",
@@ -333,19 +390,34 @@ try {
   console.log("Atomic workspace import verified: 32 groups with no visible intermediate churn");
   console.log("Packaged AppImage acceptance passed:", commandDisplay);
   console.log("Effective backend labels:", effective.join(" | "));
+  stage("all packaged AppImage acceptance checks passed");
 } catch (error) {
+  console.error("[acceptance] failed:", error);
   if (driver) {
     try {
-      const screenshot = await driver.takeScreenshot();
+      stage("capturing failure screenshot");
+      const screenshot = await withTimeout(driver.takeScreenshot(), 5000, "Failure screenshot");
       writeFileSync(process.env.ACCEPTANCE_SCREENSHOT || "/tmp/gui4tihulu-appimage-acceptance.png", screenshot, "base64");
-    } catch {
-      // Preserve the original acceptance failure.
+    } catch (screenshotError) {
+      console.error("[acceptance] screenshot capture failed:", screenshotError);
     }
   }
   throw error;
 } finally {
   if (driver) {
-    try { await driver.quit(); } catch {}
+    try {
+      stage("closing WebDriver session");
+      await withTimeout(driver.quit(), 5000, "WebDriver quit");
+    } catch (quitError) {
+      console.error("[acceptance] WebDriver quit failed:", quitError);
+    }
   }
-  if (tauriDriver && !tauriDriver.killed) tauriDriver.kill("SIGTERM");
+  if (tauriDriver && !tauriDriver.killed) {
+    stage("stopping tauri-driver");
+    tauriDriver.kill("SIGTERM");
+    const forceKill = setTimeout(() => {
+      if (!tauriDriver.killed) tauriDriver.kill("SIGKILL");
+    }, 2000);
+    forceKill.unref();
+  }
 }
