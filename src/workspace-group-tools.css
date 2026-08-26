@@ -1,0 +1,42 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+
+.workspace-group-bulk-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 12px;
+  margin: 0 0 10px;
+  border: 1px solid rgba(89, 142, 171, .18);
+  border-radius: 12px;
+  background: rgba(7, 12, 23, .42);
+}
+.workspace-group-bulk-copy { display: grid; gap: 2px; min-width: 150px; }
+.workspace-group-bulk-copy strong { font-size: .86rem; color: #eef8ff; }
+.workspace-group-bulk-copy small { font-size: .74rem; color: #8fa2b8; }
+.workspace-group-bulk-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+
+#studioGroupList .studio-group-card[data-group-id] {
+  contain: layout paint style;
+  content-visibility: auto;
+  contain-intrinsic-size: 178px 70px;
+}
+#studioGroupList .workspace-group-thumb {
+  width: 48px;
+  height: 38px;
+  object-fit: cover;
+}
+#studioGroupList .group-check { cursor: pointer; }
+#studioGroupList .group-check input:checked + span {
+  box-shadow: 0 0 0 2px rgba(80, 219, 255, .24);
+}
+
+/* Keep the group command strip immediately above the Frames area as requested. */
+#section-photos .studio-command-bar + .photo-layout {
+  margin-top: 10px;
+}
+
+@media (max-width: 900px) {
+  .workspace-group-bulk-toolbar { align-items: flex-start; flex-direction: column; }
+  .workspace-group-bulk-actions { justify-content: flex-start; }
+}
