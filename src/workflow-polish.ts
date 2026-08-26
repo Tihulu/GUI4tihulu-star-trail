@@ -3,9 +3,15 @@ import "./workflow-polish.css";
 
 type QuickMode = "trail" | "timelapse";
 type LinkMode = "copy" | "symlink" | "hardlink" | "none";
+type Mode = "run" | "group" | QuickMode;
 
 function qs<T extends Element>(selector: string): T | null {
   return document.querySelector<T>(selector);
+}
+
+function activeMode(): Mode {
+  const value = qs<HTMLButtonElement>(".mode-tab.active")?.dataset.mode;
+  return value === "group" || value === "trail" || value === "timelapse" ? value : "run";
 }
 
 function activateQuickMode(mode: QuickMode): void {
@@ -61,12 +67,12 @@ function installWorkspaceQuickActions(): void {
   trail.type = "button";
   trail.id = "workspaceTrail";
   trail.className = "secondary-button fit-primary";
-  trail.textContent = "Trail selected →";
+  trail.textContent = "Trail included frames →";
   const timelapse = document.createElement("button");
   timelapse.type = "button";
   timelapse.id = "workspaceTimelapse";
   timelapse.className = "secondary-button fit-primary";
-  timelapse.textContent = "Timelapse selected →";
+  timelapse.textContent = "Timelapse included frames →";
 
   processButton.remove();
   actions.append(trail, timelapse, processButton);
@@ -75,10 +81,24 @@ function installWorkspaceQuickActions(): void {
   timelapse.addEventListener("click", () => activateQuickMode("timelapse"));
 }
 
+function forceAllFramesExcluded(): void {
+  const allIncluded = qs<HTMLInputElement>("#allIncluded");
+  if (!allIncluded) return;
+  // The main workspace handler applies the checkbox value to every frame. Force a
+  // checked -> click transition so it deterministically becomes false even if a
+  // previous partial selection left the aggregate checkbox unchecked.
+  allIncluded.checked = true;
+  allIncluded.click();
+}
+
 function installGroupQuickActions(): void {
   const footer = qs<HTMLElement>(".studio-group-footer");
   const processButton = qs<HTMLButtonElement>("#studioUseGroup");
   if (!footer || !processButton || qs("#studioTrailGroup")) return;
+
+  // The original handler only cleared outside frames when allIncluded happened to
+  // be checked. Always clear first so "this group" truly means this group only.
+  processButton.addEventListener("click", forceAllFramesExcluded, { capture: true });
 
   const actions = document.createElement("div");
   actions.className = "studio-group-quick-actions";
@@ -138,12 +158,38 @@ function installLinkModeHelp(): void {
   refresh();
 }
 
+function installModeRequestGuard(): void {
+  const start = qs<HTMLButtonElement>("#startJob");
+  if (!start || start.dataset.workflowGuardReady === "1") return;
+  start.dataset.workflowGuardReady = "1";
+  start.addEventListener("click", () => {
+    const mode = activeMode();
+    if (mode === "run") return;
+    const replacements: Array<[string, string]> = mode === "group"
+      ? [["minFrames", "2"], ["jpegQuality", "95"], ["fps", "24"], ["codec", "mp4v"]]
+      : mode === "trail"
+        ? [["threshold", "0.42"], ["minMatches", "18"], ["maxSide", "1000"], ["nfeatures", "2500"], ["timeWindowHours", "6"], ["fps", "24"], ["codec", "mp4v"]]
+        : [["threshold", "0.42"], ["minMatches", "18"], ["maxSide", "1000"], ["nfeatures", "2500"], ["timeWindowHours", "6"], ["jpegQuality", "95"]];
+    const snapshot: Array<[HTMLInputElement, string]> = [];
+    for (const [id, safeValue] of replacements) {
+      const input = qs<HTMLInputElement>(`#${id}`);
+      if (!input) continue;
+      snapshot.push([input, input.value]);
+      input.value = safeValue;
+    }
+    // main.ts creates the request synchronously in its click listener. Restore the
+    // hidden fields immediately afterwards so switching modes does not lose settings.
+    queueMicrotask(() => snapshot.forEach(([input, value]) => { input.value = value; }));
+  }, { capture: true });
+}
+
 function install(): boolean {
   if (!qs("#section-photos") || !qs("#advancedCard")) return false;
   installOutputNames();
   installWorkspaceQuickActions();
   installLinkModeHelp();
   installGroupQuickActions();
+  installModeRequestGuard();
   return Boolean(qs("#trailOutputName") && qs("#timelapseOutputName") && qs("#workspaceTrail") && qs("#studioTrailGroup"));
 }
 
