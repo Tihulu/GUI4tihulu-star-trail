@@ -115,10 +115,10 @@ ENGINE_PATH="$(find_tihulu 2>/dev/null || true)"
 if [ -z "$ENGINE_PATH" ]; then
   say "tihulu-star-trail is not installed — installing the current engine"
   install_current_engine
-elif engine_supports_policies "$ENGINE_PATH"; then
+elif engine_supports_runtime "$ENGINE_PATH" && { ! command -v nvidia-smi >/dev/null 2>&1 || engine_gpu_ready "$ENGINE_PATH"; }; then
   say "Found compatible tihulu-star-trail: $ENGINE_PATH"
 else
-  say "Installed tihulu engine is older than this GUI — updating it"
+  say "Installed tihulu engine is missing the required runtime or GPU backend — updating it"
   install_current_engine
 fi
 
@@ -126,8 +126,10 @@ ENGINE_PATH="$(find_tihulu 2>/dev/null || true)"
 [ -n "$ENGINE_PATH" ] || fail "tihulu-star-trail installation finished but the tihulu launcher was not found."
 "$ENGINE_PATH" --help >/dev/null 2>&1 || fail "The tihulu launcher exists but could not be executed."
 engine_supports_runtime "$ENGINE_PATH" || fail "The engine was installed but is missing the required hardware probe or RAW thumbnail runtime."
+GPU_VERIFIED=0
 if command -v nvidia-smi >/dev/null 2>&1; then
   engine_gpu_ready "$ENGINE_PATH" || fail "NVIDIA is present, but the tihulu CUDA runtime probe failed. GPU mode was not accepted as ready."
+  GPU_VERIFIED=1
 fi
 
 PYTHON=""
@@ -238,5 +240,8 @@ EOF
 esac
 
 printf '\nEngine: %s\n' "$ENGINE_PATH"
-printf 'Engine hardware controls: Auto / CPU / GPU / GPU+CPU ready\n'
+printf 'Engine hardware controls installed: Auto / CPU / GPU / GPU+CPU\n'
+if [ "$GPU_VERIFIED" -eq 1 ]; then
+  printf 'NVIDIA GPU runtime: verified\n'
+fi
 printf 'License: GNU AGPL v3 (AGPL-3.0-only)\n'
