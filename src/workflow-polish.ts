@@ -33,6 +33,12 @@ function validOutputStem(value: string): boolean {
   return trimmed.length > 0 && trimmed !== "." && trimmed !== ".." && !/[\\/:*?"<>|]/.test(trimmed);
 }
 
+function syncOutputNameVisibility(): void {
+  const mode = activeMode();
+  qs<HTMLInputElement>("#trailOutputName")?.closest<HTMLElement>(".workflow-output-name")?.classList.toggle("hidden", mode !== "trail");
+  qs<HTMLInputElement>("#timelapseOutputName")?.closest<HTMLElement>(".workflow-output-name")?.classList.toggle("hidden", mode !== "timelapse");
+}
+
 function installOutputNames(): void {
   const trailCard = qs<HTMLElement>("#trailOptionsCard");
   const timelapseCard = qs<HTMLElement>("#timelapseOptionsCard");
@@ -59,6 +65,11 @@ function installOutputNames(): void {
       input.classList.toggle("workflow-field-error", !validOutputStem(input.value));
     });
   });
+  if (document.body.dataset.outputNameVisibilityReady !== "1") {
+    document.body.dataset.outputNameVisibilityReady = "1";
+    document.querySelectorAll<HTMLButtonElement>(".mode-tab").forEach((button) => button.addEventListener("click", () => window.setTimeout(syncOutputNameVisibility, 0)));
+  }
+  syncOutputNameVisibility();
 }
 
 function installWorkspaceQuickActions(): void {
@@ -98,9 +109,6 @@ function installExactGroupSelectionGuard(): void {
   const processButton = qs<HTMLButtonElement>("#studioUseGroup");
   if (!processButton || processButton.dataset.exactGroupGuardReady === "1") return;
   processButton.dataset.exactGroupGuardReady = "1";
-  // Both the existing parity-bar Trail/Timelapse buttons and the normal Process
-  // button funnel through studioUseGroup. Clear outside includes before its original
-  // handler repopulates the active group, so old partial selections cannot leak in.
   processButton.addEventListener("click", forceAllFramesExcluded, { capture: true });
 }
 
