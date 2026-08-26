@@ -6,6 +6,8 @@ GUI_REPO="Tihulu/GUI4tihulu-star-trail"
 ENGINE_REPO="Tihulu/tihulu-star-trail"
 TAURI_IDENTIFIER="io.github.tihulu.gui4startrail"
 WAYLAND_APP_ID="gui4tihulu-star-trail"
+COSMIC_APP_ID="Gui4tihulu-star-trail"
+ICON_NAME="tihulu-star-trail-studio"
 OS="$(uname -s)"
 ARCH="$(uname -m)"
 
@@ -62,6 +64,12 @@ engine_gpu_ready() {
   ENGINE_DIR="$(dirname "$1")"
   [ -x "$ENGINE_DIR/tihulu-hardware" ] || return 1
   "$ENGINE_DIR/tihulu-hardware" --mode gpu >/dev/null 2>&1
+}
+
+engine_supports_cuda_group_matching() {
+  ENGINE_DIR="$(dirname "$1")"
+  [ -x "$ENGINE_DIR/python" ] || return 1
+  "$ENGINE_DIR/python" -c 'from tihulu_star_trail.gpu_matching import cupy_mutual_ratio_matches' >/dev/null 2>&1
 }
 
 wrap_managed_engine_launcher() {
@@ -174,16 +182,15 @@ ENGINE_PATH="$(find_tihulu 2>/dev/null || true)"
 if [ -z "$ENGINE_PATH" ]; then
   say "tihulu-star-trail is not installed — installing the current engine"
   install_current_engine
-elif engine_supports_runtime "$ENGINE_PATH" && { ! command -v nvidia-smi >/dev/null 2>&1 || engine_gpu_ready "$ENGINE_PATH"; }; then
+elif engine_supports_runtime "$ENGINE_PATH" && { ! command -v nvidia-smi >/dev/null 2>&1 || { engine_gpu_ready "$ENGINE_PATH" && engine_supports_cuda_group_matching "$ENGINE_PATH"; }; }; then
   say "Found compatible tihulu-star-trail: $ENGINE_PATH"
 else
-  say "Installed tihulu engine is missing the required runtime or GPU backend — updating it"
+  say "Installed tihulu engine is missing the required runtime, CUDA grouping matcher, or GPU backend — updating it"
   install_current_engine
 fi
 
 # Even when the engine was already current, repair the managed launchers so an
-# existing v0.3.10/v0.3.11 AppImage cannot poison host Python with AppImage's
-# PYTHONHOME/PYTHONPATH/LD_LIBRARY_PATH values.
+# existing AppImage cannot poison host Python with AppImage runtime paths.
 install_appimage_safe_engine_wrappers
 
 ENGINE_PATH="$(find_tihulu 2>/dev/null || true)"
@@ -193,6 +200,7 @@ engine_supports_runtime "$ENGINE_PATH" || fail "The engine was installed but is 
 GPU_VERIFIED=0
 if command -v nvidia-smi >/dev/null 2>&1; then
   engine_gpu_ready "$ENGINE_PATH" || fail "NVIDIA is present, but the tihulu CUDA runtime probe failed. GPU mode was not accepted as ready."
+  engine_supports_cuda_group_matching "$ENGINE_PATH" || fail "NVIDIA is present, but the installed engine does not contain the CUDA descriptor matcher required by current GPU grouping."
   GPU_VERIFIED=1
 fi
 
@@ -256,8 +264,12 @@ case "$OS" in
     mkdir -p "$HOME/.local/bin" "$HOME/.local/share/applications"
     ICON_DIR="$HOME/.local/share/icons/hicolor/scalable/apps"
     mkdir -p "$ICON_DIR"
-    ICON_PATH="$ICON_DIR/$WAYLAND_APP_ID.svg"
+    ICON_PATH="$ICON_DIR/$ICON_NAME.svg"
     curl -fsSL "https://raw.githubusercontent.com/$GUI_REPO/main/app-icon.svg" -o "$ICON_PATH"
+    # Some Wayland shells resolve Icon= using the runtime app-id rather than a
+    # desktop-file alias. Keep both observed app-id casings available too.
+    cp -f "$ICON_PATH" "$ICON_DIR/$WAYLAND_APP_ID.svg"
+    cp -f "$ICON_PATH" "$ICON_DIR/$COSMIC_APP_ID.svg"
 
     APPIMAGE="$HOME/.local/bin/tihulu-star-trail-studio"
     LAUNCHER="$HOME/.local/bin/tihulu-star-trail-studio-launcher"
@@ -282,25 +294,27 @@ exec "$APPIMAGE" "\$@"
 EOF
     chmod +x "$LAUNCHER"
 
-    # COSMIC/Wayland groups a running window by the AppImage's actual GTK/Wry
-    # app-id, which is the packaged binary name. Match Tauri's generated
-    # AppImage desktop entry instead of the reverse-DNS bundle identifier.
+    # COSMIC showed the live Wry/GTK identity as "Gui4tihulu-star-trail" while
+    # other desktops may normalize it to lowercase. Desktop-file lookup on
+    # Wayland is case-sensitive, so install exact aliases for both identities.
     rm -f "$HOME/.local/share/applications/tihulu-star-trail-studio.desktop"
     rm -f "$HOME/.local/share/applications/$TAURI_IDENTIFIER.desktop"
-    DESKTOP_FILE="$HOME/.local/share/applications/$WAYLAND_APP_ID.desktop"
-    cat > "$DESKTOP_FILE" <<EOF
+    for APP_ID in "$WAYLAND_APP_ID" "$COSMIC_APP_ID"; do
+      DESKTOP_FILE="$HOME/.local/share/applications/$APP_ID.desktop"
+      cat > "$DESKTOP_FILE" <<EOF
 [Desktop Entry]
 Type=Application
 Name=Tihulu Star Trail Studio
 Comment=Modern GUI for tihulu-star-trail
 Exec=$LAUNCHER
-Icon=$WAYLAND_APP_ID
-StartupWMClass=$WAYLAND_APP_ID
-X-GNOME-WMClass=$WAYLAND_APP_ID
+Icon=$ICON_NAME
+StartupWMClass=$APP_ID
+X-GNOME-WMClass=$APP_ID
 Terminal=false
 Categories=Graphics;Photography;
 StartupNotify=true
 EOF
+    done
     command -v gtk-update-icon-cache >/dev/null 2>&1 && gtk-update-icon-cache -f -t "$HOME/.local/share/icons/hicolor" >/dev/null 2>&1 || true
     command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "$HOME/.local/share/applications" >/dev/null 2>&1 || true
     say "Installed Tihulu Star Trail Studio"
@@ -311,6 +325,6 @@ esac
 printf '\nEngine: %s\n' "$ENGINE_PATH"
 printf 'Engine hardware controls installed: Auto / CPU / GPU / GPU+CPU\n'
 if [ "$GPU_VERIFIED" -eq 1 ]; then
-  printf 'NVIDIA GPU runtime: verified\n'
+  printf 'NVIDIA GPU runtime: verified (CuPy + CUDA grouping matcher)\n'
 fi
 printf 'License: GNU AGPL v3 (AGPL-3.0-only)\n'
