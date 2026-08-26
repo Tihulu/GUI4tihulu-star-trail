@@ -54,7 +54,10 @@ function installOutputNames(): void {
     const input = qs<HTMLInputElement>(`#${id}`);
     if (!input || input.dataset.outputValidationReady === "1") return;
     input.dataset.outputValidationReady = "1";
-    input.addEventListener("input", () => input.classList.toggle("workflow-field-error", !validOutputStem(input.value)));
+    input.addEventListener("input", () => {
+      input.setCustomValidity("");
+      input.classList.toggle("workflow-field-error", !validOutputStem(input.value));
+    });
   });
 }
 
@@ -157,12 +160,31 @@ function installLinkModeHelp(): void {
   refresh();
 }
 
+function validActiveOutputName(mode: Mode): boolean {
+  if (mode !== "trail" && mode !== "timelapse") return true;
+  const input = qs<HTMLInputElement>(mode === "trail" ? "#trailOutputName" : "#timelapseOutputName");
+  if (!input || validOutputStem(input.value)) {
+    input?.setCustomValidity("");
+    return true;
+  }
+  input.classList.add("workflow-field-error");
+  input.setCustomValidity("Use a filename without / \\ : * ? \" < > | characters.");
+  input.reportValidity();
+  input.focus();
+  return false;
+}
+
 function installModeRequestGuard(): void {
   const start = qs<HTMLButtonElement>("#startJob");
   if (!start || start.dataset.workflowGuardReady === "1") return;
   start.dataset.workflowGuardReady = "1";
-  start.addEventListener("click", () => {
+  start.addEventListener("click", (event) => {
     const mode = activeMode();
+    if (!validActiveOutputName(mode)) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      return;
+    }
     if (mode === "run") return;
     const replacements: Array<[string, string]> = mode === "group"
       ? [["minFrames", "2"], ["jpegQuality", "95"], ["fps", "24"], ["codec", "mp4v"]]
