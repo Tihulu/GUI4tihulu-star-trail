@@ -236,7 +236,10 @@ fn hide_console(command: &mut Command) {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
-        command.creation_flags(windows_sys::Win32_System_Threading::CREATE_NO_WINDOW);
+        // Win32 CREATE_NO_WINDOW. Keep the flag local instead of depending on
+        // windows-sys generated module paths, which can move across crate versions.
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
     }
     #[cfg(not(windows))]
     let _ = command;
