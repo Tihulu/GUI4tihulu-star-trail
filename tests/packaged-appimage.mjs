@@ -19,14 +19,20 @@ for (const [label, value] of [
   assert.ok(value && existsSync(value), `${label} must point to an existing path: ${value}`);
 }
 
-const previewSource = resolve(inputDir, "acceptance-preview.png");
-writeFileSync(
-  previewSource,
-  Buffer.from(
-    "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAFklEQVR4nGPkEpFjYGBgYmBgYGBgAAAC5gBAXKUgWwAAAABJRU5ErkJggg==",
-    "base64",
+const previewBytes = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAFklEQVR4nGPkEpFjYGBgYmBgYGBgAAAC5gBAXKUgWwAAAABJRU5ErkJggg==",
+  "base64",
+);
+const acceptanceSources = Array.from({ length: 32 }, (_, index) =>
+  resolve(
+    inputDir,
+    index === 0
+      ? "acceptance-preview.png"
+      : `acceptance-synthetic-${String(index).padStart(3, "0")}.png`,
   ),
 );
+for (const source of acceptanceSources) writeFileSync(source, previewBytes);
+const previewSource = acceptanceSources[0];
 
 const sleep = (ms) => new Promise((resolvePromise) => setTimeout(resolvePromise, ms));
 const stage = (message) => console.log(`[acceptance] ${new Date().toISOString()} ${message}`);
@@ -139,39 +145,67 @@ try {
   );
   stage("native thumbnail IPC passed");
 
-  stage("checking Photo Editor canvas");
-  const editorPreview = await driver.executeAsyncScript(
-    function installEditorTile(sourcePath, sourceRoot) {
+  stage("loading real 32-frame Photo Workspace state");
+  const workspaceScan = await driver.executeAsyncScript(
+    function chooseAndScanWorkspace(sourceRoot, expectedCount) {
       const done = arguments[arguments.length - 1];
-      const grid = document.querySelector("#photoGrid");
-      const sourceLabel = document.querySelector("#photoSourcePath");
-      if (!grid || !sourceLabel) {
-        done({ ok: false, error: "Photo Workspace DOM is unavailable" });
+      const internals = window.__TAURI_INTERNALS__;
+      const originalInvoke = internals?.invoke;
+      const choose = document.querySelector("#chooseAndScan");
+      if (!internals || typeof originalInvoke !== "function" || !choose) {
+        done({ ok: false, error: "Packaged workspace scan controls are unavailable" });
         return;
       }
 
-      sourceLabel.textContent = sourceRoot;
-      grid.innerHTML = "";
-      const tile = document.createElement("article");
-      tile.className = "photo-tile selected";
-      tile.dataset.path = sourcePath;
+      let restored = false;
+      const restoreInvoke = () => {
+        if (restored) return;
+        restored = true;
+        internals.invoke = originalInvoke;
+      };
+      internals.invoke = function patchedInvoke(command, args, options) {
+        if (command === "plugin:dialog|open") return Promise.resolve(sourceRoot);
+        return originalInvoke.call(this, command, args, options);
+      };
 
-      const thumbWrap = document.createElement("div");
-      thumbWrap.className = "thumb-wrap";
-      const image = document.createElement("img");
-      image.dataset.thumbPath = sourcePath;
-      image.dataset.thumbVersion = "packaged-editor-v0312";
-      thumbWrap.append(image);
+      choose.click();
+      const deadline = Date.now() + 12000;
+      const poll = () => {
+        const tiles = Array.from(document.querySelectorAll("#photoGrid .photo-tile[data-path]"));
+        const label = document.querySelector("#photoSourcePath")?.textContent?.trim() || "";
+        if (tiles.length === expectedCount && label === sourceRoot) {
+          const paths = tiles.map((tile) => tile.dataset.path).filter(Boolean);
+          restoreInvoke();
+          done({ ok: true, paths, count: paths.length });
+          return;
+        }
+        if (Date.now() >= deadline) {
+          restoreInvoke();
+          done({ ok: false, error: "Real Photo Workspace scan timed out", count: tiles.length, label });
+          return;
+        }
+        setTimeout(poll, 80);
+      };
+      poll();
+    },
+    inputDir,
+    acceptanceSources.length,
+  );
+  assert.equal(workspaceScan?.ok, true, workspaceScan?.error || "Real Photo Workspace scan failed");
+  assert.equal(workspaceScan.count, 32, "Packaged workspace did not load the real 32-frame scan state");
+  assert.equal(new Set(workspaceScan.paths).size, 32, "Packaged workspace scan returned duplicate frame paths");
+  stage("real 32-frame Photo Workspace state loaded");
 
-      const copy = document.createElement("div");
-      copy.className = "tile-copy";
-      const strong = document.createElement("strong");
-      strong.textContent = "acceptance-preview.png";
-      copy.append(strong);
-      tile.append(thumbWrap, copy);
-      grid.append(tile);
-      window.dispatchEvent(new CustomEvent("tihulu:workspace-grid-rendered"));
-
+  stage("checking Photo Editor canvas");
+  const editorPreview = await driver.executeAsyncScript(
+    function selectRealEditorTile() {
+      const done = arguments[arguments.length - 1];
+      const firstTile = document.querySelector("#photoGrid .photo-tile[data-path]");
+      if (!firstTile) {
+        done({ ok: false, error: "Real workspace has no frame for Photo Editor" });
+        return;
+      }
+      firstTile.click();
       const deadline = Date.now() + 12000;
       const poll = () => {
         const canvas = document.querySelector("#studioEditPreview canvas");
@@ -193,8 +227,6 @@ try {
       };
       poll();
     },
-    previewSource,
-    inputDir,
   );
   assert.equal(editorPreview?.ok, true, editorPreview?.error || "Photo Editor preview failed");
   assert.ok(editorPreview.width > 0 && editorPreview.height > 0, "Photo Editor canvas has invalid dimensions");
@@ -202,91 +234,63 @@ try {
 
   stage("checking atomic 32-group workspace import");
   const workspaceImport = await driver.executeAsyncScript(
-    function exerciseAtomicImport(realPath, sourceRoot) {
+    function exerciseAtomicImport(paths, sourceRoot) {
       const done = arguments[arguments.length - 1];
-      const grid = document.querySelector("#photoGrid");
-      const sourceLabel = document.querySelector("#photoSourcePath");
       const list = document.querySelector("#studioGroupList");
-      if (!grid || !sourceLabel || !list) {
-        done({ ok: false, error: "Workspace group DOM is unavailable" });
+      if (!list || !Array.isArray(paths) || paths.length !== 32) {
+        done({ ok: false, error: "Real workspace paths/group DOM are unavailable", pathCount: paths?.length || 0 });
         return;
       }
 
-      sourceLabel.textContent = sourceRoot;
-      grid.innerHTML = "";
-      const paths = [];
-      const groupCount = 32;
-      for (let index = 0; index < groupCount; index += 1) {
-        const path = index === 0 ? realPath : `${sourceRoot}/acceptance-synthetic-${String(index).padStart(3, "0")}.jpg`;
-        paths.push(path);
-        const tile = document.createElement("article");
-        tile.className = "photo-tile";
-        tile.dataset.path = path;
-        const copy = document.createElement("div");
-        copy.className = "tile-copy";
-        const strong = document.createElement("strong");
-        strong.textContent = `frame-${index}`;
-        copy.append(strong);
-        if (index === 0) {
-          const image = document.createElement("img");
-          image.dataset.thumbPath = realPath;
-          image.dataset.thumbVersion = "packaged-group-v0312";
-          tile.append(image);
+      const groupCount = paths.length;
+      const visibleIntermediate = [];
+      const observer = new MutationObserver(() => {
+        const count = list.querySelectorAll(".studio-group-card[data-group-id]").length;
+        if (count > 0 && count < groupCount && list.style.visibility !== "hidden") {
+          visibleIntermediate.push({ count, visibility: list.style.visibility, scrollWidth: list.scrollWidth });
         }
-        tile.append(copy);
-        grid.append(tile);
-      }
+      });
+      observer.observe(list, { childList: true, subtree: true });
 
-      setTimeout(() => {
-        const visibleIntermediate = [];
-        const observer = new MutationObserver(() => {
-          const count = list.querySelectorAll(".studio-group-card[data-group-id]").length;
-          if (count > 0 && count < groupCount && list.style.visibility !== "hidden") {
-            visibleIntermediate.push({ count, visibility: list.style.visibility, scrollWidth: list.scrollWidth });
-          }
-        });
-        observer.observe(list, { childList: true, subtree: true });
+      let settled = false;
+      const finish = (value) => {
+        if (settled) return;
+        settled = true;
+        observer.disconnect();
+        window.removeEventListener("tihulu:workspace-groups-imported", onImported);
+        done(value);
+      };
+      const onImported = () => {
+        setTimeout(() => {
+          finish({
+            ok: true,
+            finalCount: list.querySelectorAll(".studio-group-card[data-group-id]").length,
+            visibleIntermediate,
+            visibility: list.style.visibility,
+          });
+        }, 80);
+      };
 
-        let settled = false;
-        const finish = (value) => {
-          if (settled) return;
-          settled = true;
-          observer.disconnect();
-          window.removeEventListener("tihulu:workspace-groups-imported", onImported);
-          done(value);
-        };
-        const onImported = () => {
-          setTimeout(() => {
-            finish({
-              ok: true,
-              finalCount: list.querySelectorAll(".studio-group-card[data-group-id]").length,
-              visibleIntermediate,
-              visibility: list.style.visibility,
-            });
-          }, 80);
-        };
+      window.addEventListener("tihulu:workspace-groups-imported", onImported, { once: true });
+      window.dispatchEvent(new CustomEvent("tihulu:engine-groups-resolved", {
+        detail: {
+          source: sourceRoot,
+          output: `${sourceRoot}/acceptance-output`,
+          groups: paths.map((path, index) => ({
+            name: `group_${String(index + 1).padStart(3, "0")}`,
+            paths: [path],
+          })),
+        },
+      }));
 
-        window.addEventListener("tihulu:workspace-groups-imported", onImported, { once: true });
-        window.dispatchEvent(new CustomEvent("tihulu:engine-groups-resolved", {
-          detail: {
-            source: sourceRoot,
-            output: `${sourceRoot}/acceptance-output`,
-            groups: paths.map((path, index) => ({
-              name: `group_${String(index + 1).padStart(3, "0")}`,
-              paths: [path],
-            })),
-          },
-        }));
-
-        setTimeout(() => finish({
-          ok: false,
-          error: "Atomic workspace import timed out",
-          finalCount: list.querySelectorAll(".studio-group-card[data-group-id]").length,
-          visibleIntermediate,
-        }), 10000);
-      }, 350);
+      setTimeout(() => finish({
+        ok: false,
+        error: "Atomic workspace import timed out",
+        finalCount: list.querySelectorAll(".studio-group-card[data-group-id]").length,
+        visibleIntermediate,
+      }), 10000);
     },
-    previewSource,
+    workspaceScan.paths,
     inputDir,
   );
   assert.equal(workspaceImport?.ok, true, workspaceImport?.error || "Atomic workspace import failed");
@@ -310,54 +314,97 @@ try {
         hidden: tile.classList.contains("studio-group-hidden"),
         included: Boolean(tile.querySelector(".include-box input")?.checked),
       }));
+      const waitFor = (predicate, timeoutMs, onReady, onTimeout) => {
+        const deadline = Date.now() + timeoutMs;
+        const poll = () => {
+          if (predicate()) { onReady(); return; }
+          if (Date.now() >= deadline) { onTimeout(); return; }
+          setTimeout(poll, 40);
+        };
+        poll();
+      };
       if (groupCards().length < 2) {
         done({ ok: false, error: "Need at least two groups for visible include scope acceptance" });
         return;
       }
 
       open(groupCards()[0]);
-      setTimeout(() => {
-        const firstVisible = tileState().filter((item) => !item.hidden);
-        if (firstVisible.length !== 1 || !checkbox()?.checked) {
-          done({ ok: false, error: "First group did not become the active included visible scope", firstVisible });
-          return;
-        }
-        const firstPath = firstVisible[0].path;
-        checkbox()?.click();
-        setTimeout(() => {
-          const afterExclude = tileState();
-          const first = afterExclude.find((item) => item.path === firstPath);
-          const outsideIncluded = afterExclude.some((item) => item.path !== firstPath && item.included);
-          if (first?.included || !outsideIncluded || checkbox()?.checked) {
-            done({ ok: false, error: "Include all changed frames outside the visible group", first, outsideIncluded });
-            return;
-          }
-
-          open(groupCards()[1]);
-          setTimeout(() => {
-            const secondVisible = tileState().filter((item) => !item.hidden);
-            const firstStillExcluded = tileState().find((item) => item.path === firstPath)?.included === false;
-            if (secondVisible.length !== 1 || !secondVisible[0].included || !checkbox()?.checked || !firstStillExcluded) {
-              done({ ok: false, error: "Switching groups did not scope inclusion to the clicked group", secondVisible, firstStillExcluded });
-              return;
-            }
-
-            document.querySelector("#studioGroupList .all-card")?.click();
-            setTimeout(() => {
-              const all = tileState();
-              done({
-                ok: all.length === 32 && all.every((item) => !item.hidden && item.included) && Boolean(checkbox()?.checked),
-                error: "All frames did not restore every shown frame to Included",
-                included: all.filter((item) => item.included).length,
-                hidden: all.filter((item) => item.hidden).length,
-              });
-            }, 140);
-          }, 140);
-        }, 140);
-      }, 140);
+      waitFor(
+        () => tileState().filter((item) => !item.hidden).length === 1 && Boolean(checkbox()?.checked),
+        2500,
+        () => {
+          const firstVisible = tileState().filter((item) => !item.hidden);
+          const firstPath = firstVisible[0].path;
+          checkbox()?.click();
+          waitFor(
+            () => {
+              const afterExclude = tileState();
+              const first = afterExclude.find((item) => item.path === firstPath);
+              const outsideIncluded = afterExclude.some((item) => item.path !== firstPath && item.included);
+              return first?.included === false && outsideIncluded && !checkbox()?.checked;
+            },
+            2500,
+            () => {
+              open(groupCards()[1]);
+              waitFor(
+                () => {
+                  const state = tileState();
+                  const secondVisible = state.filter((item) => !item.hidden);
+                  const firstStillExcluded = state.find((item) => item.path === firstPath)?.included === false;
+                  return secondVisible.length === 1 && secondVisible[0].included && Boolean(checkbox()?.checked) && firstStillExcluded;
+                },
+                2500,
+                () => {
+                  document.querySelector("#studioGroupList .all-card")?.click();
+                  waitFor(
+                    () => {
+                      const all = tileState();
+                      return all.length === 32 && all.every((item) => !item.hidden && item.included) && Boolean(checkbox()?.checked);
+                    },
+                    2500,
+                    () => done({ ok: true }),
+                    () => {
+                      const all = tileState();
+                      done({
+                        ok: false,
+                        error: "All frames did not restore every shown frame to Included",
+                        included: all.filter((item) => item.included).length,
+                        hidden: all.filter((item) => item.hidden).length,
+                        count: all.length,
+                      });
+                    },
+                  );
+                },
+                () => done({
+                  ok: false,
+                  error: "Switching groups did not scope inclusion to the clicked group",
+                  state: tileState(),
+                  checked: Boolean(checkbox()?.checked),
+                }),
+              );
+            },
+            () => done({
+              ok: false,
+              error: "Include all changed frames outside the visible group",
+              state: tileState(),
+              checked: Boolean(checkbox()?.checked),
+            }),
+          );
+        },
+        () => done({
+          ok: false,
+          error: "First group did not become the active included visible scope",
+          state: tileState(),
+          checked: Boolean(checkbox()?.checked),
+        }),
+      );
     },
   );
-  assert.equal(groupIncludeScope?.ok, true, groupIncludeScope?.error || "Visible group Include all scope failed");
+  assert.equal(
+    groupIncludeScope?.ok,
+    true,
+    `${groupIncludeScope?.error || "Visible group Include all scope failed"}: ${JSON.stringify(groupIncludeScope)}`,
+  );
   stage("visible-group Include all scope passed");
 
   const request = {
@@ -433,7 +480,8 @@ try {
 
   console.log("Packaged thumbnail data URL verified:", String(thumbnailResult.value.dataUrl).slice(0, 32));
   console.log("Packaged Photo Editor canvas verified:", `${editorPreview.width}x${editorPreview.height}`);
-  console.log("Atomic workspace import verified: 32 groups with no visible intermediate churn");
+  console.log("Atomic workspace import verified: 32 real workspace frames grouped with no visible intermediate churn");
+  console.log("Visible group Include all scope verified against real main workspace state");
   console.log("Packaged AppImage acceptance passed:", commandDisplay);
   console.log("Effective backend labels:", effective.join(" | "));
   stage("all packaged AppImage acceptance checks passed");
