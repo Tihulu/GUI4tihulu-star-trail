@@ -1,0 +1,58 @@
+name: Apply workspace scan bridge patch
+
+on:
+  push:
+    branches:
+      - fix/visible-group-include-scope
+    paths:
+      - .github/workflows/apply-workspace-scan-bridge.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/visible-group-include-scope
+          fetch-depth: 0
+
+      - name: Add deterministic workspace scan bridge
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('src/main.ts')
+          text = path.read_text()
+          marker = 'tihulu:workspace-scan-source'
+          if marker not in text:
+              needle = '  window.addEventListener("tihulu:workspace-visible-scope", (event) => {\n'
+              insert = '''  window.addEventListener("tihulu:workspace-scan-source", (event) => {
+    const source = (event as CustomEvent<{ source?: string }>).detail?.source;
+    if (typeof source !== "string" || !source.trim()) return;
+    inputPath = source;
+    setPath(inputPathEl, inputPath, "Choose a folder containing your night-sky photos");
+    qs<HTMLElement>("#photoSourcePath").textContent = inputPath;
+    updateStartState();
+    setSection("photos");
+    void scanPhotos(inputPath);
+  });
+'''
+              if needle not in text:
+                  raise SystemExit('workspace-visible-scope listener marker not found')
+              text = text.replace(needle, insert + needle, 1)
+              path.write_text(text)
+          PY
+
+      - name: Commit patch and remove helper
+        shell: bash
+        run: |
+          git rm .github/workflows/apply-workspace-scan-bridge.yml
+          git add src/main.ts
+          git config user.name "Tihulu"
+          git config user.email "40742160+Tihulu@users.noreply.github.com"
+          git commit -m "fix: expose deterministic workspace scan bridge"
+          git push origin HEAD:fix/visible-group-include-scope
