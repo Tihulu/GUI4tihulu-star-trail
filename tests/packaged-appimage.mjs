@@ -170,6 +170,7 @@ try {
       copy.append(strong);
       tile.append(thumbWrap, copy);
       grid.append(tile);
+      window.dispatchEvent(new CustomEvent("tihulu:workspace-grid-rendered"));
 
       const deadline = Date.now() + 12000;
       const poll = () => {
@@ -182,6 +183,9 @@ try {
           done({
             ok: false,
             error: document.querySelector("#studioEditPreview")?.textContent?.trim() || "Photo Editor canvas timed out",
+            editName: document.querySelector("#studioEditName")?.textContent?.trim() || "",
+            renderMode: document.querySelector("#studioEditRenderMode")?.textContent?.trim() || "",
+            moduleState: document.documentElement.dataset.moduleStudioEditor || "",
           });
           return;
         }
@@ -438,7 +442,7 @@ try {
   if (driver) {
     try {
       stage("capturing failure screenshot");
-      const screenshot = await withTimeout(driver.takeScreenshot(), 5000, "Failure screenshot");
+      const screenshot = await withTimeout(driver.takeScreenshot(), 20000, "Failure screenshot");
       writeFileSync(process.env.ACCEPTANCE_SCREENSHOT || "/tmp/gui4tihulu-appimage-acceptance.png", screenshot, "base64");
     } catch (screenshotError) {
       console.error("[acceptance] screenshot capture failed:", screenshotError);

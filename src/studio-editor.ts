@@ -497,6 +497,8 @@ function setupStudioEditor(
       renderEditorForSelection();
     });
   }
+  window.addEventListener("tihulu:workspace-grid-rendered", () => queueStructureSync());
+
   const observer = new MutationObserver((mutations) => {
     const structureChanged = mutations.some((mutation) => mutation.type === "childList");
     if (structureChanged) queueStructureSync();
