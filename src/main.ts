@@ -166,6 +166,7 @@ let running = false;
 let selectedLinkMode: LinkMode = navigator.userAgent.includes("Windows") ? "copy" : "symlink";
 let logHasContent = false;
 let photos: PhotoRecord[] = [];
+let workspaceVisiblePaths: Set<string> | null = null;
 let selectedPaths = new Set<string>();
 let selectionAnchor: number | null = null;
 let sortMode: SortMode = "manual";
@@ -203,6 +204,20 @@ function setOutputPath(value: string): void {
 }
 function setSection(next: Section): void { document.querySelectorAll<HTMLElement>(".studio-section").forEach((item) => item.classList.toggle("active", item.id === `section-${next}`)); document.querySelectorAll<HTMLButtonElement>(".section-tab").forEach((button) => button.classList.toggle("active", button.dataset.section === next)); }
 function includedPhotos(): PhotoRecord[] { return photos.filter((photo) => photo.included); }
+function visiblePhotos(): PhotoRecord[] {
+  if (workspaceVisiblePaths === null) return photos;
+  return photos.filter((photo) => workspaceVisiblePaths?.has(photo.path));
+}
+function applyVisibleWorkspaceScope(paths: string[], includeAll: boolean, excludeOutside: boolean): void {
+  const knownPaths = new Set(photos.map((photo) => photo.path));
+  const requested = paths.filter((path) => knownPaths.has(path));
+  workspaceVisiblePaths = requested.length === photos.length ? null : new Set(requested);
+  const visible = visiblePhotos();
+  const visiblePaths = new Set(visible.map((photo) => photo.path));
+  if (excludeOutside) photos.forEach((photo) => { if (!visiblePaths.has(photo.path)) photo.included = false; });
+  if (includeAll) visible.forEach((photo) => { photo.included = true; });
+  renderPhotoGrid();
+}
 
 function updateMode(next: Mode): void {
   mode = next;
@@ -281,7 +296,20 @@ function sortPhotos(next: SortMode): void { sortMode = next; if (next !== "manua
 function selectedRecords(): PhotoRecord[] { return photos.filter((photo) => selectedPaths.has(photo.path)); }
 function setIncludedForSelection(included: boolean): void { if (selectedPaths.size === 0) return; photos.forEach((photo) => { if (selectedPaths.has(photo.path)) photo.included = included; }); renderPhotoGrid(); }
 function selectPhoto(index: number, event: MouseEvent): void { const path = photos[index]?.path; if (!path) return; if (event.shiftKey && selectionAnchor !== null) { if (!(event.ctrlKey || event.metaKey)) selectedPaths.clear(); const [from, to] = [selectionAnchor, index].sort((a, b) => a - b); for (let cursor = from; cursor <= to; cursor += 1) selectedPaths.add(photos[cursor].path); } else if (event.ctrlKey || event.metaKey) { if (selectedPaths.has(path)) selectedPaths.delete(path); else selectedPaths.add(path); selectionAnchor = index; } else { selectedPaths.clear(); selectedPaths.add(path); selectionAnchor = index; } renderPhotoGrid(); }
-function updatePhotoStats(): void { qs<HTMLElement>("#workspaceCount").textContent = `${photos.length} photo${photos.length === 1 ? "" : "s"}`; qs<HTMLElement>("#includedCount").textContent = `${includedPhotos().length} included`; qs<HTMLElement>("#selectedCount").textContent = `${selectedPaths.size} selected`; qs<HTMLInputElement>("#allIncluded").checked = photos.length > 0 && includedPhotos().length === photos.length; qs<HTMLElement>("#photoSourcePath").textContent = scannedInput || "No folder selected"; updateStartState(); }
+function updatePhotoStats(): void {
+  const visible = visiblePhotos();
+  const visibleIncluded = visible.filter((photo) => photo.included);
+  const scoped = workspaceVisiblePaths !== null;
+  const allIncluded = qs<HTMLInputElement>("#allIncluded");
+  qs<HTMLElement>("#workspaceCount").textContent = `${photos.length} photo${photos.length === 1 ? "" : "s"}`;
+  qs<HTMLElement>("#includedCount").textContent = scoped ? `${visibleIncluded.length}/${visible.length} shown included` : `${includedPhotos().length} included`;
+  qs<HTMLElement>("#selectedCount").textContent = `${selectedPaths.size} selected`;
+  allIncluded.checked = visible.length > 0 && visibleIncluded.length === visible.length;
+  allIncluded.indeterminate = visibleIncluded.length > 0 && visibleIncluded.length < visible.length;
+  allIncluded.title = scoped ? "Include or exclude every frame shown in the active group" : "Include or exclude every frame currently shown";
+  qs<HTMLElement>("#photoSourcePath").textContent = scannedInput || "No folder selected";
+  updateStartState();
+}
 function renderInspector(): void { const inspector = qs<HTMLElement>("#photoInspector"); const selected = selectedRecords(); if (selected.length === 0) { inspector.innerHTML = `<div class="inspector-empty"><span class="inspector-star">✦</span><strong>Select a frame</strong><p>Filename, path, file type, size and capture/file time appear here.</p></div>`; return; } const photo = selected[0]; const preview = photo.browserPreviewable ? `<img class="inspector-preview" data-thumb-path="${escapeHtml(photo.path)}" data-thumb-version="${photo.modifiedMs ?? 0}:${photo.sizeBytes}" alt="">` : `<div class="inspector-raw"><span>${escapeHtml(photo.extension.toUpperCase())}</span><small>RAW preview is available in Full Desktop</small></div>`; inspector.innerHTML = `${preview}<div class="inspector-content"><p class="eyebrow">FRAME DETAILS</p><h2>${escapeHtml(photo.name)}</h2><dl class="metadata-list"><div><dt>Status</dt><dd>${photo.included ? "Included" : "Excluded"}</dd></div><div><dt>Format</dt><dd>${escapeHtml(photo.extension.toUpperCase() || "Unknown")}${photo.isRaw ? " · RAW" : ""}</dd></div><div><dt>Size</dt><dd>${formatBytes(photo.sizeBytes)}</dd></div><div><dt>Capture / file date</dt><dd>${escapeHtml(formatDate(photo.modifiedMs))}</dd></div><div><dt>Path</dt><dd class="path-meta">${escapeHtml(photo.path)}</dd></div></dl>${selected.length > 1 ? `<p class="multi-note">${selected.length} frames selected. Include/exclude and drag actions apply to the selection.</p>` : ""}</div>`; }
 function renderPhotoGrid(): void {
   const grid = qs<HTMLDivElement>("#photoGrid");
@@ -302,7 +330,7 @@ function renderPhotoGrid(): void {
   });
   renderInspector(); updatePhotoStats();
 }
-async function scanPhotos(source = inputPath): Promise<void> { if (!source) { appendLog("Choose an input folder before scanning.", "stderr"); return; } qs<HTMLElement>("#photoSourcePath").textContent = "Scanning…"; try { const result = await invoke<PhotoInfo[]>("scan_photos", { input: source, recursive: qs<HTMLInputElement>("#workspaceRecursive").checked }); photos = result.map((photo) => ({ ...photo, included: true })); selectedPaths.clear(); selectionAnchor = null; sortMode = "manual"; qs<HTMLSelectElement>("#photoSort").value = "manual"; scannedInput = source; renderPhotoGrid(); appendLog(`Photo Workspace loaded ${photos.length} supported image(s).`); } catch (error) { photos = []; scannedInput = ""; renderPhotoGrid(); appendLog(String(error), "stderr"); } }
+async function scanPhotos(source = inputPath): Promise<void> { if (!source) { appendLog("Choose an input folder before scanning.", "stderr"); return; } qs<HTMLElement>("#photoSourcePath").textContent = "Scanning…"; try { const result = await invoke<PhotoInfo[]>("scan_photos", { input: source, recursive: qs<HTMLInputElement>("#workspaceRecursive").checked }); photos = result.map((photo) => ({ ...photo, included: true })); workspaceVisiblePaths = null; selectedPaths.clear(); selectionAnchor = null; sortMode = "manual"; qs<HTMLSelectElement>("#photoSort").value = "manual"; scannedInput = source; renderPhotoGrid(); appendLog(`Photo Workspace loaded ${photos.length} supported image(s).`); } catch (error) { photos = []; workspaceVisiblePaths = null; scannedInput = ""; renderPhotoGrid(); appendLog(String(error), "stderr"); } }
 async function pickInputFolder(andScan = false): Promise<void> { const value = await open({ directory: true, multiple: false, title: "Choose photo folder" }); if (typeof value !== "string") return; inputPath = value; setPath(inputPathEl, inputPath, "Choose a folder containing your night-sky photos"); qs<HTMLElement>("#photoSourcePath").textContent = inputPath; updateStartState(); if (andScan) { setSection("photos"); await scanPhotos(value); } }
 async function pickOutputFolder(): Promise<void> { const value = await open({ directory: true, multiple: false, title: "Choose output folder" }); if (typeof value !== "string") return; setOutputPath(value); }
 
@@ -319,7 +347,15 @@ function wireEvents(): void {
   qs<HTMLButtonElement>("#clearPhotoSelection").addEventListener("click", () => { selectedPaths.clear(); selectionAnchor = null; renderPhotoGrid(); });
   qs<HTMLButtonElement>("#invertPhotoSelection").addEventListener("click", () => { selectedPaths = new Set(photos.filter((photo) => !selectedPaths.has(photo.path)).map((photo) => photo.path)); renderPhotoGrid(); });
   qs<HTMLButtonElement>("#includeSelected").addEventListener("click", () => setIncludedForSelection(true)); qs<HTMLButtonElement>("#excludeSelected").addEventListener("click", () => setIncludedForSelection(false));
-  qs<HTMLInputElement>("#allIncluded").addEventListener("change", (event) => { const included = (event.target as HTMLInputElement).checked; photos.forEach((photo) => { photo.included = included; }); renderPhotoGrid(); });
+  qs<HTMLInputElement>("#allIncluded").addEventListener("change", (event) => {
+    const included = (event.target as HTMLInputElement).checked;
+    visiblePhotos().forEach((photo) => { photo.included = included; });
+    renderPhotoGrid();
+  });
+  window.addEventListener("tihulu:workspace-visible-scope", (event) => {
+    const detail = (event as CustomEvent<{ paths?: string[]; includeAll?: boolean; excludeOutside?: boolean }>).detail;
+    applyVisibleWorkspaceScope(Array.isArray(detail?.paths) ? detail.paths : [], detail?.includeAll === true, detail?.excludeOutside === true);
+  });
   qs<HTMLInputElement>("#workspaceRecursive").addEventListener("change", () => { qs<HTMLInputElement>("#recursive").checked = qs<HTMLInputElement>("#workspaceRecursive").checked; }); qs<HTMLInputElement>("#recursive").addEventListener("change", () => { qs<HTMLInputElement>("#workspaceRecursive").checked = qs<HTMLInputElement>("#recursive").checked; });
   qs<HTMLInputElement>("#useWorkspaceSelection").addEventListener("change", updateStartState); qs<HTMLButtonElement>("#goToProcess").addEventListener("click", () => setSection("process"));
   qs<HTMLButtonElement>("#startJob").addEventListener("click", () => void startJob()); qs<HTMLButtonElement>("#stopJob").addEventListener("click", async () => { try { await invoke("stop_job"); appendLog("Stop requested."); } catch (error) { appendLog(String(error), "stderr"); } });

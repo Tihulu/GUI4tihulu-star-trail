@@ -294,6 +294,68 @@ try {
   );
   stage("atomic 32-group workspace import passed");
 
+  stage("checking visible-group Include all scope");
+  const groupIncludeScope = await driver.executeAsyncScript(
+    function exerciseVisibleIncludeScope() {
+      const done = arguments[arguments.length - 1];
+      const groupCards = () => Array.from(document.querySelectorAll("#studioGroupList .studio-group-card[data-group-id]"));
+      const open = (card) => card?.querySelector(".group-open")?.click();
+      const checkbox = () => document.querySelector("#allIncluded");
+      const tileState = () => Array.from(document.querySelectorAll("#photoGrid .photo-tile[data-path]")).map((tile) => ({
+        path: tile.dataset.path,
+        hidden: tile.classList.contains("studio-group-hidden"),
+        included: Boolean(tile.querySelector(".include-box input")?.checked),
+      }));
+      if (groupCards().length < 2) {
+        done({ ok: false, error: "Need at least two groups for visible include scope acceptance" });
+        return;
+      }
+
+      open(groupCards()[0]);
+      setTimeout(() => {
+        const firstVisible = tileState().filter((item) => !item.hidden);
+        if (firstVisible.length !== 1 || !checkbox()?.checked) {
+          done({ ok: false, error: "First group did not become the active included visible scope", firstVisible });
+          return;
+        }
+        const firstPath = firstVisible[0].path;
+        checkbox()?.click();
+        setTimeout(() => {
+          const afterExclude = tileState();
+          const first = afterExclude.find((item) => item.path === firstPath);
+          const outsideIncluded = afterExclude.some((item) => item.path !== firstPath && item.included);
+          if (first?.included || !outsideIncluded || checkbox()?.checked) {
+            done({ ok: false, error: "Include all changed frames outside the visible group", first, outsideIncluded });
+            return;
+          }
+
+          open(groupCards()[1]);
+          setTimeout(() => {
+            const secondVisible = tileState().filter((item) => !item.hidden);
+            const firstStillExcluded = tileState().find((item) => item.path === firstPath)?.included === false;
+            if (secondVisible.length !== 1 || !secondVisible[0].included || !checkbox()?.checked || !firstStillExcluded) {
+              done({ ok: false, error: "Switching groups did not scope inclusion to the clicked group", secondVisible, firstStillExcluded });
+              return;
+            }
+
+            document.querySelector("#studioGroupList .all-card")?.click();
+            setTimeout(() => {
+              const all = tileState();
+              done({
+                ok: all.length === 32 && all.every((item) => !item.hidden && item.included) && Boolean(checkbox()?.checked),
+                error: "All frames did not restore every shown frame to Included",
+                included: all.filter((item) => item.included).length,
+                hidden: all.filter((item) => item.hidden).length,
+              });
+            }, 140);
+          }, 140);
+        }, 140);
+      }, 140);
+    },
+  );
+  assert.equal(groupIncludeScope?.ok, true, groupIncludeScope?.error || "Visible group Include all scope failed");
+  stage("visible-group Include all scope passed");
+
   const request = {
     command: "run",
     input: inputDir,
