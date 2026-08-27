@@ -7,6 +7,7 @@ const main = readFileSync(new URL("../src/main.ts", import.meta.url), "utf8");
 const editor = readFileSync(new URL("../src/studio-editor.ts", import.meta.url), "utf8");
 const polish = readFileSync(new URL("../src/workflow-polish.ts", import.meta.url), "utf8");
 
+// Visible scope must survive every photo-grid DOM rebuild; otherwise group switching races the filter guard.
 test("Include all is scoped to the visible Studio group", () => {
   assert.match(main, /let workspaceVisiblePaths: Set<string> \| null = null/);
   assert.match(main, /visiblePhotos\(\)\.forEach\(\(photo\) => \{ photo\.included = included; \}\)/);
