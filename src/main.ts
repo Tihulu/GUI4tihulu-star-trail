@@ -353,6 +353,16 @@ function wireEvents(): void {
     visiblePhotos().forEach((photo) => { photo.included = included; });
     renderPhotoGrid();
   });
+  window.addEventListener("tihulu:workspace-scan-source", (event) => {
+    const source = (event as CustomEvent<{ source?: string }>).detail?.source;
+    if (typeof source !== "string" || !source.trim()) return;
+    inputPath = source;
+    setPath(inputPathEl, inputPath, "Choose a folder containing your night-sky photos");
+    qs<HTMLElement>("#photoSourcePath").textContent = inputPath;
+    updateStartState();
+    setSection("photos");
+    void scanPhotos(inputPath);
+  });
   window.addEventListener("tihulu:workspace-visible-scope", (event) => {
     const detail = (event as CustomEvent<{ paths?: string[]; includeAll?: boolean; excludeOutside?: boolean }>).detail;
     applyVisibleWorkspaceScope(Array.isArray(detail?.paths) ? detail.paths : [], detail?.includeAll === true, detail?.excludeOutside === true);
