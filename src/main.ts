@@ -317,7 +317,7 @@ function renderPhotoGrid(): void {
   grid.innerHTML = "";
   photos.forEach((photo, index) => {
     const tile = document.createElement("article");
-    tile.className = `photo-tile${selectedPaths.has(photo.path) ? " selected" : ""}${photo.included ? "" : " excluded"}`; tile.draggable = sortMode === "manual"; tile.dataset.path = photo.path;
+    tile.className = `photo-tile${selectedPaths.has(photo.path) ? " selected" : ""}${photo.included ? "" : " excluded"}${workspaceVisiblePaths !== null && !workspaceVisiblePaths.has(photo.path) ? " studio-group-hidden" : ""}`; tile.draggable = sortMode === "manual"; tile.dataset.path = photo.path;
     const preview = photo.browserPreviewable ? `<img data-thumb-path="${escapeHtml(photo.path)}" data-thumb-version="${photo.modifiedMs ?? 0}:${photo.sizeBytes}" alt="" loading="lazy">` : `<div class="raw-placeholder"><span>${escapeHtml(photo.extension.toUpperCase())}</span><small>RAW</small></div>`;
     tile.innerHTML = `<label class="include-box" title="Include this frame"><input type="checkbox" ${photo.included ? "checked" : ""}><span></span></label><div class="thumb-wrap">${preview}<span class="order-badge">${index + 1}</span></div><div class="tile-copy"><strong title="${escapeHtml(photo.name)}">${escapeHtml(photo.name)}</strong><small>${formatBytes(photo.sizeBytes)} · ${escapeHtml(formatDate(photo.modifiedMs))}</small></div>`;
     tile.addEventListener("click", (event) => { if ((event.target as HTMLElement).closest(".include-box")) return; selectPhoto(index, event); });

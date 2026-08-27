@@ -12,6 +12,7 @@ test("Include all is scoped to the visible Studio group", () => {
   assert.match(main, /visiblePhotos\(\)\.forEach\(\(photo\) => \{ photo\.included = included; \}\)/);
   assert.match(main, /allIncluded\.indeterminate = visibleIncluded\.length > 0 && visibleIncluded\.length < visible\.length/);
   assert.match(main, /tihulu:workspace-visible-scope/);
+  assert.match(main, /workspaceVisiblePaths !== null && !workspaceVisiblePaths\.has\(photo\.path\).*studio-group-hidden/);
 });
 
 test("opening a group or All frames includes the visible scope by default", () => {
