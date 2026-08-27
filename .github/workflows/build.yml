@@ -126,6 +126,7 @@ jobs:
     name: Linux packaged AppImage acceptance
     needs: build
     runs-on: ubuntu-22.04
+    timeout-minutes: 8
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -197,6 +198,7 @@ jobs:
 
       - name: Run real packaged AppImage acceptance
         shell: bash
+        timeout-minutes: 3
         run: |
           set -euo pipefail
           export PATH="$FAKE_BIN:$PATH"
@@ -204,7 +206,9 @@ jobs:
           export APPIMAGE_EXTRACT_AND_RUN=1
           export WEBKIT_DISABLE_DMABUF_RENDERER=1
           export LIBGL_ALWAYS_SOFTWARE=1
-          xvfb-run -a node tests/packaged-appimage.mjs
+          echo "Starting packaged AppImage acceptance with a 180-second hard watchdog"
+          timeout --verbose --signal=TERM --kill-after=10s 180s \
+            xvfb-run -a node tests/packaged-appimage-entry.mjs
 
       - name: Upload acceptance screenshot on failure
         if: failure()
