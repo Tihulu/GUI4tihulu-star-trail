@@ -16,6 +16,12 @@ test("Include all is scoped to the visible Studio group", () => {
   assert.match(main, /workspaceVisiblePaths !== null && !workspaceVisiblePaths\.has\(photo\.path\).*studio-group-hidden/);
 });
 
+test("packaged acceptance can request the real workspace scan path without an OS dialog", () => {
+  assert.match(main, /tihulu:workspace-scan-source/);
+  assert.match(main, /void scanPhotos\(inputPath\)/);
+  assert.match(main, /setPath\(inputPathEl, inputPath/);
+});
+
 test("opening a group or All frames includes the visible scope by default", () => {
   assert.match(editor, /function activateGroupView\(groupId: string \| null\)/);
   assert.match(editor, /publishWorkspaceScope\(true\)/);
