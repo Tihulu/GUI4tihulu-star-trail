@@ -80,6 +80,15 @@ function install(): boolean {
     }
   }, true);
 
+  // Grid scans/imports rebuild tile DOM without necessarily producing a user click.
+  // Observe child-list changes directly so the editor picks the new primary selection
+  // immediately instead of depending on the bounded startup repair timer.
+  const gridObserver = new MutationObserver((mutations) => {
+    if (!mutations.some((mutation) => mutation.type === "childList")) return;
+    if (editorNeedsSync()) schedulePulse(20);
+  });
+  gridObserver.observe(grid, { childList: true, subtree: true });
+
   window.addEventListener("tihulu:workspace-groups-imported", () => schedulePulse(80));
   window.addEventListener("tihulu:workspace-group-move", () => schedulePulse(80));
 
