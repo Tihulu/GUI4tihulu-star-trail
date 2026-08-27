@@ -37,7 +37,7 @@ function installBranding(): boolean {
   brandMark.setAttribute("title", "Tihulu Star Trail Studio");
 
   const footerVersion = document.querySelector<HTMLElement>(".footer > span");
-  if (footerVersion) footerVersion.textContent = "GUI4tihulu-star-trail · AGPL-3.0-only · v0.3.12";
+  if (footerVersion) footerVersion.textContent = "GUI4tihulu-star-trail · AGPL-3.0-only · v0.3.13";
   return true;
 }
 
