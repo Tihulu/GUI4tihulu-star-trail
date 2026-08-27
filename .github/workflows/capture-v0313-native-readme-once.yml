@@ -1,0 +1,77 @@
+name: Capture v0.3.13 native README screenshots once
+
+on:
+  push:
+    branches:
+      - fix/visible-group-include-scope
+    paths:
+      - scripts/run-v0313-native-readme-capture.txt
+
+permissions:
+  contents: write
+
+jobs:
+  capture:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/visible-group-include-scope
+      - name: Install prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev webkit2gtk-driver xvfb build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev xdg-utils patchelf python3-pil
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install dependencies
+        run: |
+          npm install
+          npm install --no-save --ignore-scripts selenium-webdriver
+          cargo install tauri-driver --locked
+          npx tauri icon app-icon.svg
+      - name: Build packaged AppImage
+        run: npm run tauri build -- --bundles appimage
+      - name: Capture native packaged UI
+        shell: bash
+        run: |
+          set -euo pipefail
+          appimage="$(find src-tauri/target/release/bundle/appimage -type f -name '*.AppImage' -print -quit)"
+          test -n "$appimage"
+          chmod +x "$appimage"
+          export APPIMAGE_PATH="$appimage"
+          export README_SCREENSHOT_DIR="$GITHUB_WORKSPACE/docs/screenshots"
+          export TAURI_WEBVIEW_AUTOMATION=1
+          export APPIMAGE_EXTRACT_AND_RUN=1
+          export WEBKIT_DISABLE_DMABUF_RENDERER=1
+          export LIBGL_ALWAYS_SOFTWARE=1
+          timeout --verbose --signal=TERM --kill-after=15s 180s xvfb-run -a node tests/capture-readme-screenshots.mjs
+      - name: Reject blank or tiny screenshots
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          from PIL import Image, ImageStat
+          for name in ['process-gpu', 'workspace-groups', 'photo-editor', 'parameter-guide']:
+              path = Path(f'docs/screenshots/v0.3.13-{name}.png')
+              if not path.exists(): raise SystemExit(f'missing screenshot: {path}')
+              image = Image.open(path).convert('RGB')
+              width, height = image.size
+              if width < 900 or height < 600: raise SystemExit(f'screenshot too small: {path} {width}x{height}')
+              stddev = max(ImageStat.Stat(image.resize((200, 120))).stddev)
+              if stddev < 8.0: raise SystemExit(f'screenshot looks blank/flat: {path} stddev={stddev:.2f}')
+              print(f'{path}: {width}x{height}, stddev={stddev:.2f}')
+          PY
+      - name: Keep screenshots and remove one-shot helper
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f .github/workflows/capture-v0313-native-readme-once.yml scripts/run-v0313-native-readme-capture.txt
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A docs/screenshots/v0.3.13-*.png .github/workflows/capture-v0313-native-readme-once.yml scripts/run-v0313-native-readme-capture.txt
+          git diff --cached --check
+          git commit -m 'docs: refresh v0.3.13 screenshots through native preview' || true
+          git push origin HEAD:fix/visible-group-include-scope
