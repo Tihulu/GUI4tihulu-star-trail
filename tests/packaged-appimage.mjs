@@ -147,40 +147,22 @@ try {
 
   stage("loading real 32-frame Photo Workspace state");
   const workspaceScan = await driver.executeAsyncScript(
-    function chooseAndScanWorkspace(sourceRoot, expectedCount) {
+    function scanWorkspaceThroughBridge(sourceRoot, expectedCount) {
       const done = arguments[arguments.length - 1];
-      const internals = window.__TAURI_INTERNALS__;
-      const originalInvoke = internals?.invoke;
-      const choose = document.querySelector("#chooseAndScan");
-      if (!internals || typeof originalInvoke !== "function" || !choose) {
-        done({ ok: false, error: "Packaged workspace scan controls are unavailable" });
-        return;
-      }
+      window.dispatchEvent(new CustomEvent("tihulu:workspace-scan-source", {
+        detail: { source: sourceRoot },
+      }));
 
-      let restored = false;
-      const restoreInvoke = () => {
-        if (restored) return;
-        restored = true;
-        internals.invoke = originalInvoke;
-      };
-      internals.invoke = function patchedInvoke(command, args, options) {
-        if (command === "plugin:dialog|open") return Promise.resolve(sourceRoot);
-        return originalInvoke.call(this, command, args, options);
-      };
-
-      choose.click();
       const deadline = Date.now() + 12000;
       const poll = () => {
         const tiles = Array.from(document.querySelectorAll("#photoGrid .photo-tile[data-path]"));
         const label = document.querySelector("#photoSourcePath")?.textContent?.trim() || "";
         if (tiles.length === expectedCount && label === sourceRoot) {
           const paths = tiles.map((tile) => tile.dataset.path).filter(Boolean);
-          restoreInvoke();
-          done({ ok: true, paths, count: paths.length });
+          done({ ok: true, paths, count: paths.length, label });
           return;
         }
         if (Date.now() >= deadline) {
-          restoreInvoke();
           done({ ok: false, error: "Real Photo Workspace scan timed out", count: tiles.length, label });
           return;
         }
@@ -191,7 +173,11 @@ try {
     inputDir,
     acceptanceSources.length,
   );
-  assert.equal(workspaceScan?.ok, true, workspaceScan?.error || "Real Photo Workspace scan failed");
+  assert.equal(
+    workspaceScan?.ok,
+    true,
+    `${workspaceScan?.error || "Real Photo Workspace scan failed"}: ${JSON.stringify(workspaceScan)}`,
+  );
   assert.equal(workspaceScan.count, 32, "Packaged workspace did not load the real 32-frame scan state");
   assert.equal(new Set(workspaceScan.paths).size, 32, "Packaged workspace scan returned duplicate frame paths");
   stage("real 32-frame Photo Workspace state loaded");
