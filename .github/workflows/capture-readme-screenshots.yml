@@ -4,6 +4,12 @@ on:
   push:
     branches:
       - fix/visible-group-include-scope
+    paths:
+      - 'src/**'
+      - 'src-tauri/**'
+      - 'tests/capture-readme-screenshots.mjs'
+      - 'package.json'
+      - 'package-lock.json'
 
 permissions:
   contents: write
