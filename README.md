@@ -11,13 +11,13 @@
 
 The GUI uses the installed `tihulu` engine as the source of truth instead of duplicating the astrophotography pipeline. Processing stays local and original source photos are not modified.
 
-> The screenshots below are real packaged-app captures. They are placed next to the workflow they explain so the README can be used as a visual quick-start instead of a separate gallery.
+> The screenshots below are real v0.3.13 packaged-AppImage captures. They are placed next to the workflow they explain so the README can be used as a visual quick-start instead of a separate gallery.
 
 ## Process — Group, Trail, Timelapse and Full Run
 
 Choose an input folder, one canonical project output directory, then run **Group**, **Trail**, **Timelapse**, or the complete **Full run** workflow. Readiness messages explain why a job cannot start instead of leaving the primary action silently disabled.
 
-![Process workspace showing job controls, output settings and hardware policies](./docs/screenshots/v0.3.5-process.png)
+![Process workspace showing job controls, output settings and hardware policies](./docs/screenshots/v0.3.13-process-gpu.png)
 
 The Process workspace includes:
 
@@ -40,7 +40,7 @@ Grouping is intentionally a hybrid pipeline on the standard packaged OpenCV stac
 
 After **Group** or **Full run**, engine groups are mapped back to the original source photos and imported into the workspace atomically. The group strip is not rebuilt visibly one group at a time, which avoids the scrollbar/layout jumping that is especially distracting on large projects.
 
-![Photo Workspace showing frames, manual review and groups](./docs/screenshots/v0.3.5-workspace.png)
+![Photo Workspace showing frames, manual review and groups](./docs/screenshots/v0.3.13-workspace-groups.png)
 
 Manual review supports:
 
@@ -78,7 +78,7 @@ The workspace avoids using full-resolution source images as list thumbnails. Nat
 
 The editor uses the same native decoded preview path as the workspace instead of asking the WebView to decode the original full-resolution local file again. This keeps JPEG/RAW preview behavior consistent with the thumbnail pipeline.
 
-![Photo Editor with preview and non-destructive controls](./docs/screenshots/v0.3.5-editor.png)
+![Photo Editor with preview and non-destructive controls](./docs/screenshots/v0.3.13-photo-editor.png)
 
 Per-frame edit state includes exposure, brightness, contrast, highlights, shadows, saturation, warmth, sharpness, rotation, crop aspect and JPEG export quality. The editor provides **Before**, **Undo**, **Redo**, **Reset**, Copy/Paste settings, and scoped application to selected frames, the current group or all frames.
 
@@ -88,7 +88,7 @@ Edited JPEG export is available for the current frame, selection or current grou
 
 Inline `i` help and the Parameter Guide explain grouping strictness, capture-time constraints, output controls, hardware policies, thumbnail behavior and editor parameters without requiring users to know the CLI flags first.
 
-![Parameter Guide with explanations for processing controls](./docs/screenshots/v0.3.5-parameter-guide.png)
+![Parameter Guide with explanations for processing controls](./docs/screenshots/v0.3.13-parameter-guide.png)
 
 ## Processing workspaces
 
