@@ -397,6 +397,8 @@ function setupStudioEditor(
     const canvas = document.createElement("canvas"); canvas.width = outW; canvas.height = outH; const ctx = canvas.getContext("2d", { willReadFrequently: true }); if (!ctx) { image.close(); throw new Error("Canvas renderer unavailable"); }
     try { ctx.save(); ctx.translate(outW / 2, outH / 2); ctx.rotate(radians); ctx.drawImage(image.source, cropRect.x, cropRect.y, cropRect.w, cropRect.h, -baseW / 2, -baseH / 2, baseW, baseH); ctx.restore(); }
     finally { image.close(); }
+    const hasPixelEdits = edit.exposure !== 0 || edit.brightness !== 0 || edit.contrast !== 0 || edit.highlights !== 0 || edit.shadows !== 0 || edit.saturation !== 0 || edit.warmth !== 0 || edit.sharpness !== 0;
+    if (!hasPixelEdits) return { canvas, pixelEdited: true };
     try { const frame = ctx.getImageData(0, 0, outW, outH); applyPixelEdits(frame.data, outW, outH, edit); ctx.putImageData(frame, 0, 0); return { canvas, pixelEdited: true }; } catch (error) { console.warn("Studio Editor pixel renderer unavailable; using limited CSS fallback", error); canvas.style.filter = cssFallbackFilter(edit); return { canvas, pixelEdited: false }; }
   }
   function centeredCrop(width: number, height: number, crop: EditState["crop"]): { x: number; y: number; w: number; h: number } { if (crop === "original") return { x: 0, y: 0, w: width, h: height }; const [a, b] = crop.split(":").map(Number); const target = a / b; const current = width / height; if (current > target) { const w = height * target; return { x: (width - w) / 2, y: 0, w, h: height }; } const h = width / target; return { x: 0, y: (height - h) / 2, w: width, h }; }

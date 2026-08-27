@@ -5,11 +5,7 @@ import { invoke } from "@tauri-apps/api/core";
 const GRID_SIZE: [number, number] = [320, 240];
 const INSPECTOR_SIZE: [number, number] = [960, 720];
 const GROUP_SIZE: [number, number] = [180, 120];
-// Native thumbnail generation is serialized by THUMBNAIL_GENERATION_LOCK.
-// Keeping a second grid IPC active only creates a waiter ahead of interactive
-// Photo Editor requests, so one active grid request is both safer and equally
-// fast for actual thumbnail generation.
-const MAX_ACTIVE_REQUESTS = 1;
+const MAX_ACTIVE_REQUESTS = 2;
 const MAX_FRONT_CACHE_ITEMS = 512;
 const PREFETCH_MARGIN = "220px 0px";
 const PERFORMANCE_MODE_THRESHOLD = 320;
