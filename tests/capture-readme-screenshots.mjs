@@ -2,12 +2,15 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { spawn } from "node:child_process";
+import { deflateSync } from "node:zlib";
 import { Builder, By, Capabilities, until } from "selenium-webdriver";
 
 const application = resolve(process.env.APPIMAGE_PATH || "");
 const screenshotDir = resolve(process.env.README_SCREENSHOT_DIR || "docs/screenshots");
+const fixtureDir = resolve(process.env.RUNNER_TEMP || "/tmp", "tihulu-readme-fixtures");
 assert.ok(application && existsSync(application), `APPIMAGE_PATH must exist: ${application}`);
 mkdirSync(screenshotDir, { recursive: true });
+mkdirSync(fixtureDir, { recursive: true });
 
 const sleep = (ms) => new Promise((resolvePromise) => setTimeout(resolvePromise, ms));
 function withTimeout(promise, timeoutMs, label) {
@@ -19,6 +22,74 @@ function withTimeout(promise, timeoutMs, label) {
     }),
   ]);
 }
+
+function crc32(buffer) {
+  let crc = 0xffffffff;
+  for (const byte of buffer) {
+    crc ^= byte;
+    for (let bit = 0; bit < 8; bit += 1) crc = (crc >>> 1) ^ (0xedb88320 & -(crc & 1));
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function pngChunk(type, data) {
+  const typeBuffer = Buffer.from(type, "ascii");
+  const size = Buffer.alloc(4);
+  size.writeUInt32BE(data.length);
+  const checksum = Buffer.alloc(4);
+  checksum.writeUInt32BE(crc32(Buffer.concat([typeBuffer, data])));
+  return Buffer.concat([size, typeBuffer, data, checksum]);
+}
+
+function makeNightSkyPng(width = 640, height = 360) {
+  const raw = Buffer.alloc((width * 3 + 1) * height);
+  const stars = [
+    [71, 54], [109, 93], [144, 43], [188, 121], [238, 67], [291, 104],
+    [347, 48], [392, 88], [448, 58], [507, 121], [565, 74], [604, 146],
+    [87, 167], [170, 185], [264, 154], [365, 171], [474, 162], [553, 205],
+  ];
+  for (let y = 0; y < height; y += 1) {
+    const row = y * (width * 3 + 1);
+    raw[row] = 0;
+    for (let x = 0; x < width; x += 1) {
+      const index = row + 1 + x * 3;
+      const t = y / Math.max(1, height - 1);
+      let r = Math.round(5 + 10 * t);
+      let g = Math.round(10 + 20 * t);
+      let b = Math.round(27 + 38 * t);
+      for (const [sx, sy] of stars) {
+        const distance = Math.hypot(x - sx, y - sy);
+        if (distance < 2.2) { r = 246; g = 244; b = 226; }
+      }
+      const dx = x - 330;
+      const dy = y - 286;
+      const radius = Math.hypot(dx, dy);
+      let angle = Math.atan2(dy, dx);
+      if (angle < 0) angle += Math.PI * 2;
+      const trailBand = [95, 125, 155, 185, 215, 245, 275].some((target) => Math.abs(radius - target) < 1.5);
+      if (trailBand && angle > 3.55 && angle < 5.62 && y < 320) { r = 235; g = 210; b = 151; }
+      if (y > 300 + 12 * Math.sin(x / 62) + 7 * Math.sin(x / 29)) { r = 2; g = 6; b = 12; }
+      raw[index] = r; raw[index + 1] = g; raw[index + 2] = b;
+    }
+  }
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(width, 0); ihdr.writeUInt32BE(height, 4);
+  ihdr[8] = 8; ihdr[9] = 2; ihdr[10] = 0; ihdr[11] = 0; ihdr[12] = 0;
+  return Buffer.concat([
+    Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
+    pngChunk("IHDR", ihdr),
+    pngChunk("IDAT", deflateSync(raw, { level: 9 })),
+    pngChunk("IEND", Buffer.alloc(0)),
+  ]);
+}
+
+const fixturePng = makeNightSkyPng();
+const fixtureDataUrl = `data:image/png;base64,${fixturePng.toString("base64")}`;
+const fixturePaths = Array.from({ length: 12 }, (_, index) => {
+  const path = resolve(fixtureDir, `README_${String(8840 + index)}.png`);
+  writeFileSync(path, fixturePng);
+  return path;
+});
 
 let driver;
 let tauriDriver;
@@ -52,50 +123,61 @@ try {
   await driver.wait(until.elementLocated(By.css("#studioEditPreview")), 15000);
   await driver.wait(until.elementLocated(By.css("#parameterGuideButton")), 15000);
 
-  // Process / GPU screenshot.
+  // Packaged Process UI. Select GPU, but do not fake an Effective backend result;
+  // the screenshot should show exactly what the app knows before a real job runs.
   await driver.executeScript(`
     document.querySelector('[data-section="process"]')?.click();
     const advanced = document.querySelector('#advancedCard');
     if (advanced) advanced.open = true;
     document.querySelector('#groupHardwarePolicy button[data-value="gpu"]')?.click();
-    const effective = document.querySelector('#groupHardwarePolicyEffective');
-    if (effective) effective.textContent = 'Effective backend: NVIDIA CUDA';
     document.querySelector('#groupHardwarePolicy')?.scrollIntoView({ block: 'center' });
   `);
   await capture("process-gpu");
 
-  // Parameter guide screenshot.
-  await driver.executeScript(`
-    document.querySelector('#parameterGuideButton')?.click();
-  `);
+  await driver.executeScript(`document.querySelector('#parameterGuideButton')?.click();`);
   await driver.wait(until.elementLocated(By.css(".parameter-info-overlay:not(.hidden)")), 5000);
   await capture("parameter-guide");
   await driver.executeScript(`document.querySelector('.parameter-info-close')?.click();`);
 
-  // Build a representative Photo Workspace using the real packaged UI components.
-  await driver.executeScript(`
+  // Representative workspace frames are real PNG files on disk. Their visible card
+  // thumbnails use the same deterministic fixture while the editor later reloads the
+  // selected file through Tauri's native get_thumbnail command.
+  await driver.executeScript(function installWorkspace(paths, dataUrl) {
     document.querySelector('[data-section="photos"]')?.click();
     const source = document.querySelector('#photoSourcePath');
-    if (source) source.textContent = '/home/demo/night-sky-session';
+    if (source) source.textContent = paths[0].replace(/[/\\][^/\\]+$/, '');
     const grid = document.querySelector('#photoGrid');
     if (!grid) throw new Error('photo grid missing');
     grid.innerHTML = '';
-    const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#07101f"/><stop offset="1" stop-color="#2d4168"/></linearGradient></defs><rect width="640" height="360" fill="url(#g)"/><g fill="#fff"><circle cx="90" cy="70" r="2"/><circle cx="170" cy="120" r="1.5"/><circle cx="250" cy="55" r="2"/><circle cx="340" cy="140" r="1.5"/><circle cx="450" cy="80" r="2"/><circle cx="560" cy="130" r="1.5"/></g><path d="M70 290 C190 190 390 175 590 90" fill="none" stroke="#e8d39a" stroke-width="5" opacity=".85"/></svg>';
-    const thumb = 'data:image/svg+xml;base64,' + btoa(svg);
-    const paths = [];
-    for (let i = 0; i < 12; i += 1) {
-      const path = '/home/demo/night-sky-session/IMG_' + String(8840 + i) + '.JPG';
-      paths.push(path);
+    paths.forEach((path, index) => {
       const tile = document.createElement('article');
-      tile.className = 'photo-tile' + (i === 0 ? ' selected' : '');
+      tile.className = 'photo-tile' + (index === 0 ? ' selected' : '');
       tile.dataset.path = path;
-      tile.innerHTML = '<div class="thumb-wrap"><img src="' + thumb + '"></div><div class="tile-copy"><strong>IMG_' + String(8840 + i) + '.JPG</strong><small>24 MP · Included</small></div><label class="include-box"><input type="checkbox" checked><span>Included</span></label>';
+      const thumb = document.createElement('div');
+      thumb.className = 'thumb-wrap';
+      const image = document.createElement('img');
+      image.src = dataUrl;
+      image.dataset.thumbPath = path;
+      image.dataset.thumbVersion = `readme-v0313:${index}`;
+      thumb.append(image);
+      const copy = document.createElement('div');
+      copy.className = 'tile-copy';
+      const strong = document.createElement('strong');
+      strong.textContent = `README_${8840 + index}.png`;
+      const small = document.createElement('small');
+      small.textContent = 'Demo frame · Included';
+      copy.append(strong, small);
+      const include = document.createElement('label');
+      include.className = 'include-box';
+      include.innerHTML = '<input type="checkbox" checked><span></span>';
+      tile.append(include, thumb, copy);
       grid.append(tile);
-    }
+    });
+    window.dispatchEvent(new CustomEvent('tihulu:workspace-grid-rendered'));
     window.dispatchEvent(new CustomEvent('tihulu:engine-groups-resolved', {
       detail: {
-        source: '/home/demo/night-sky-session',
-        output: '/home/demo/night-sky-session/output',
+        source: paths[0].replace(/[/\\][^/\\]+$/, ''),
+        output: paths[0].replace(/[/\\][^/\\]+$/, '') + '/output',
         groups: [
           { name: 'North sky', paths: paths.slice(0, 4) },
           { name: 'Zenith', paths: paths.slice(4, 8) },
@@ -103,32 +185,33 @@ try {
         ],
       },
     }));
-  `);
+  }, fixturePaths, fixtureDataUrl);
+
   await driver.wait(async () => (await driver.findElements(By.css("#studioGroupList .studio-group-card[data-group-id]"))).length === 3, 10000);
   await driver.executeScript(`document.querySelector('#studioGroupList')?.scrollIntoView({ block: 'center' });`);
   await capture("workspace-groups");
 
-  // Photo Editor screenshot: keep the actual editor controls and put a representative
-  // rendered preview on its real canvas surface so the docs never show an empty panel.
-  await driver.executeScript(`
-    const preview = document.querySelector('#studioEditPreview');
-    if (!preview) throw new Error('editor preview missing');
-    preview.innerHTML = '';
-    const canvas = document.createElement('canvas');
-    canvas.width = 960; canvas.height = 540;
-    const ctx = canvas.getContext('2d');
-    const grad = ctx.createLinearGradient(0, 0, 960, 540);
-    grad.addColorStop(0, '#050b18'); grad.addColorStop(1, '#263a63');
-    ctx.fillStyle = grad; ctx.fillRect(0, 0, 960, 540);
-    ctx.strokeStyle = '#f0d58f'; ctx.lineWidth = 4; ctx.globalAlpha = 0.9;
-    for (let y = 100; y < 460; y += 58) { ctx.beginPath(); ctx.arc(480, 300, y, 3.7, 5.55); ctx.stroke(); }
-    ctx.globalAlpha = 1; ctx.fillStyle = '#fff';
-    [[90,70],[170,115],[255,60],[350,135],[455,82],[560,125],[720,90],[820,170]].forEach(([x,y]) => { ctx.beginPath(); ctx.arc(x,y,2,0,Math.PI*2); ctx.fill(); });
-    preview.append(canvas);
-    const name = document.querySelector('#studioEditName'); if (name) name.textContent = 'IMG_8840.JPG';
-    const mode = document.querySelector('#studioEditRenderMode'); if (mode) mode.textContent = 'Native preview · non-destructive';
-    document.querySelector('.studio-editor-panel')?.scrollIntoView({ block: 'start' });
-  `);
+  // Re-select a real fixture frame and use the same explicit grid-render contract as
+  // main.ts. The screenshot is allowed only after the actual native editor pipeline
+  // has produced a canvas; no documentation-only canvas is drawn here.
+  await driver.executeScript(function selectNativeFixture(path) {
+    const tiles = Array.from(document.querySelectorAll('#photoGrid .photo-tile[data-path]'));
+    tiles.forEach((tile) => tile.classList.toggle('selected', tile.dataset.path === path));
+    window.dispatchEvent(new CustomEvent('tihulu:workspace-grid-rendered'));
+  }, fixturePaths[0]);
+  await driver.wait(async () => {
+    const state = await driver.executeScript(`
+      const canvas = document.querySelector('#studioEditPreview canvas');
+      return {
+        width: canvas?.width || 0,
+        height: canvas?.height || 0,
+        mode: document.querySelector('#studioEditRenderMode')?.textContent || '',
+        name: document.querySelector('#studioEditName')?.textContent || ''
+      };
+    `);
+    return state.width >= 300 && state.height >= 150 && /Edited preview/i.test(state.mode) && /README_8840/i.test(state.name);
+  }, 15000, "Native Photo Editor preview did not render for README capture");
+  await driver.executeScript(`document.querySelector('.studio-editor-panel')?.scrollIntoView({ block: 'start' });`);
   await capture("photo-editor");
 } finally {
   if (driver) {
