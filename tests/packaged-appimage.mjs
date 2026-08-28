@@ -448,21 +448,42 @@ try {
   }
   stage("start_job GPU policy contract passed");
 
-  stage("waiting for effective CUDA backend labels");
-  await driver.wait(async () => {
-    const values = await Promise.all([
-      "#groupHardwarePolicyEffective",
-      "#trailHardwarePolicyEffective",
-      "#timelapseHardwarePolicyEffective",
-    ].map(async (selector) => driver.findElement(By.css(selector)).getText()));
-    return values.every((value) => /NVIDIA CUDA/i.test(value));
-  }, 10000, "Effective backend labels did not reflect engine output");
+  const readBackendDiagnostics = () => driver.executeScript(function collectBackendDiagnostics() {
+    const text = (selector) => document.querySelector(selector)?.textContent?.trim() || "";
+    return {
+      labels: [
+        text("#groupHardwarePolicyEffective"),
+        text("#trailHardwarePolicyEffective"),
+        text("#timelapseHardwarePolicyEffective"),
+      ],
+      consoleText: text("#consoleBody"),
+      consoleLines: Array.from(document.querySelectorAll("#consoleBody .console-line")).map((row) => row.textContent?.trim() || ""),
+      hardwareBackendListening: document.documentElement.dataset.hardwareBackendListening || "",
+      moduleHardwareOptions: document.documentElement.dataset.moduleHardwareOptions || "",
+      bootstrap: document.documentElement.dataset.tihuluBootstrap || "",
+      labelCounts: [
+        document.querySelectorAll("#groupHardwarePolicyEffective").length,
+        document.querySelectorAll("#trailHardwarePolicyEffective").length,
+        document.querySelectorAll("#timelapseHardwarePolicyEffective").length,
+      ],
+    };
+  });
 
-  const effective = await Promise.all([
-    "#groupHardwarePolicyEffective",
-    "#trailHardwarePolicyEffective",
-    "#timelapseHardwarePolicyEffective",
-  ].map(async (selector) => driver.findElement(By.css(selector)).getText()));
+  stage("waiting for effective CUDA backend labels");
+  const effectiveDeadline = Date.now() + 10000;
+  let backendDiagnostics;
+  while (Date.now() < effectiveDeadline) {
+    backendDiagnostics = await readBackendDiagnostics();
+    if (backendDiagnostics.labels.every((value) => /NVIDIA CUDA/i.test(value))) break;
+    await sleep(100);
+  }
+  backendDiagnostics = await readBackendDiagnostics();
+  assert.ok(
+    backendDiagnostics.labels.every((value) => /NVIDIA CUDA/i.test(value)),
+    `Effective backend labels did not reflect engine output: ${JSON.stringify(backendDiagnostics)}`,
+  );
+
+  const effective = backendDiagnostics.labels;
 
   console.log("Packaged thumbnail data URL verified:", String(thumbnailResult.value.dataUrl).slice(0, 32));
   console.log("Packaged Photo Editor canvas verified:", `${editorPreview.width}x${editorPreview.height}`);
