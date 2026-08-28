@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import "./hardware-options.css";
+import { listen } from "@tauri-apps/api/event";
 
 type HardwareMode = "auto" | "cpu" | "gpu" | "hybrid";
 type HardwareKind = "group" | "trail" | "timelapse";
+type LogPayload = { stream: "stdout" | "stderr"; line: string };
 const INFO: Record<HardwareKind, { title: string; body: string }> = {
   group: {
     title: "Grouping compute",
@@ -17,6 +19,8 @@ const INFO: Record<HardwareKind, { title: string; body: string }> = {
     body: "Controls hardware used while preparing timelapse frames. CUDA/OpenCL can accelerate resize work; video encoding and I/O still use the CPU/codec backend. Auto may fall back to CPU. Explicit GPU or GPU + CPU requires an available accelerator backend and stops if it cannot use one.",
   },
 };
+
+let previousJobLogLine = "";
 
 function qs<T extends Element>(selector: string): T | null { return document.querySelector<T>(selector); }
 
@@ -56,6 +60,7 @@ function setEffective(kind: HardwareKind, value: string): void {
 }
 
 function resetEffectiveForActiveJob(): void {
+  previousJobLogLine = "";
   const mode = activeMode();
   const kinds: HardwareKind[] = mode === "run" ? ["group", "trail", "timelapse"] : [mode];
   kinds.forEach((kind) => setEffective(kind, "checking…"));
@@ -71,37 +76,31 @@ function classifyBackendLine(line: string, previousLine: string): HardwareKind |
   return null;
 }
 
-function installBackendObserver(): void {
-  const consoleBody = qs<HTMLElement>("#consoleBody");
-  if (!consoleBody || consoleBody.dataset.hardwareObserved === "true") return;
-  consoleBody.dataset.hardwareObserved = "true";
-  let processed = 0;
-  const consume = () => {
-    const rows = Array.from(consoleBody.querySelectorAll<HTMLElement>(".console-line"));
-    if (rows.length < processed) processed = 0;
-    for (let index = processed; index < rows.length; index += 1) {
-      const line = rows[index].textContent?.trim() ?? "";
-      const previousLine = index > 0 ? rows[index - 1].textContent?.trim() ?? "" : "";
-      const match = line.match(/(?:Grouping )?Hardware acceleration:\s*(.+)$/i);
-      if (match) {
-        const kind = classifyBackendLine(line, previousLine);
-        if (kind) setEffective(kind, match[1].trim());
-      }
-      if (/acceleration was explicitly requested/i.test(line) || /no usable CUDA or OpenCL backend/i.test(line)) {
-        const mode = activeMode();
-        if (mode === "run") ["group", "trail", "timelapse"].forEach((kind) => {
-          if (effectiveNode(kind as HardwareKind)?.textContent?.includes("checking")) setEffective(kind as HardwareKind, "unavailable · job stopped");
-        });
-        else setEffective(mode, "unavailable · job stopped");
-      }
-    }
-    processed = rows.length;
-  };
-  new MutationObserver((mutations) => {
-    if (mutations.some((mutation) => mutation.type === "childList" && mutation.removedNodes.length > 0)) processed = 0;
-    consume();
-  }).observe(consoleBody, { childList: true, subtree: true, characterData: true });
-  consume();
+function consumeBackendLine(line: string): void {
+  const normalized = line.trim();
+  const match = normalized.match(/(?:Grouping )?Hardware acceleration:\s*(.+)$/i);
+  if (match) {
+    const kind = classifyBackendLine(normalized, previousJobLogLine);
+    if (kind) setEffective(kind, match[1].trim());
+  }
+  if (/acceleration was explicitly requested/i.test(normalized) || /no usable CUDA or OpenCL backend/i.test(normalized)) {
+    const mode = activeMode();
+    if (mode === "run") ["group", "trail", "timelapse"].forEach((kind) => {
+      if (effectiveNode(kind as HardwareKind)?.textContent?.includes("checking")) setEffective(kind as HardwareKind, "unavailable · job stopped");
+    });
+    else setEffective(mode, "unavailable · job stopped");
+  }
+  previousJobLogLine = normalized;
+}
+
+function installBackendListener(): void {
+  const root = document.documentElement;
+  if (root.dataset.hardwareBackendListening === "true") return;
+  root.dataset.hardwareBackendListening = "true";
+  void listen<LogPayload>("job-log", (event) => consumeBackendLine(event.payload.line)).catch((error) => {
+    root.dataset.hardwareBackendListening = "failed";
+    console.warn("Hardware backend listener unavailable", error);
+  });
 }
 
 function wireSegment(id: string): void {
@@ -135,7 +134,7 @@ function install(): boolean {
   const trailCard = qs<HTMLElement>("#trailOptionsCard");
   const timelapseCard = qs<HTMLElement>("#timelapseOptionsCard");
   if (!grouping || !trailCard || !timelapseCard) return false;
-  if (qs("#groupHardwarePolicy")) { installBackendObserver(); return true; }
+  if (qs("#groupHardwarePolicy")) { installBackendListener(); return true; }
 
   const groupWrap = document.createElement("div");
   groupWrap.className = "hardware-policy-wrap";
@@ -155,7 +154,7 @@ function install(): boolean {
   ["groupHardwarePolicy", "trailHardwarePolicy", "timelapseHardwarePolicy"].forEach(wireSegment);
   document.querySelectorAll<HTMLButtonElement>("[data-hardware-info]").forEach((button) => button.addEventListener("click", () => showInfo(button.dataset.hardwareInfo as HardwareKind)));
   qs<HTMLButtonElement>("#startJob")?.addEventListener("click", resetEffectiveForActiveJob, true);
-  installBackendObserver();
+  installBackendListener();
   return true;
 }
 
