@@ -11,61 +11,93 @@
 
 The GUI uses the installed `tihulu` engine as the source of truth instead of duplicating the astrophotography pipeline. Processing stays local and original source photos are not modified.
 
-## v0.3.5 at a glance
+> The screenshots below are real v0.3.13 packaged-AppImage captures. They are placed next to the workflow they explain so the README can be used as a visual quick-start instead of a separate gallery.
 
-### Process, readiness and independent hardware controls
+## Process — Group, Trail, Timelapse and Full Run
 
-![v0.3.5 Process workspace](./docs/screenshots/v0.3.5-process.png)
+Choose an input folder, one canonical project output directory, then run **Group**, **Trail**, **Timelapse**, or the complete **Full run** workflow. Readiness messages explain why a job cannot start instead of leaving the primary action silently disabled.
 
-Process exposes four quick workflows: **Full run**, **Group**, **Trail** and **Timelapse**. The primary action now explains why it is disabled instead of remaining silently grey: engine checking/missing, missing input/output, no included workspace frames, or another running job are surfaced directly below the button.
+![Process workspace showing job controls, output settings and hardware policies](./docs/screenshots/v0.3.13-process-gpu.png)
 
-Trail and Timelapse keep their own settings. Timelapse exposes FPS, maximum video side and the four-character OpenCV codec field (for example `mp4v`). Grouping, trail rendering and timelapse rendering each have an independent **Auto / CPU / GPU / GPU+CPU** selector.
+The Process workspace includes:
 
-GPU/hybrid is capability-dependent: the installed OpenCV build must expose a usable CUDA or OpenCL backend. If acceleration is unavailable or fails, the engine safely continues on CPU. Selecting GPU therefore does **not** guarantee that a machine's GPU will actually be used.
+- native input/output pickers
+- one canonical output directory shared with Photo Workspace
+- independent Group / Trail / Timelapse settings
+- custom Trail and Timelapse filenames inside the project output directory
+- advanced grouping and rendering parameters
+- streaming engine output and cancellation
+- independent **Auto / CPU / GPU / GPU+CPU** hardware selectors
+- an **Effective backend** readout based on the engine's actual runtime report
 
-## Photo Workspace and engine-group sync
+### GPU behavior
 
-![v0.3.5 Photo Workspace](./docs/screenshots/v0.3.5-workspace.png)
+Hardware selection is passed directly in each job request. Explicit GPU jobs carry the exact engine flags, including `--group-hardware gpu`, `--trail-hardware gpu`, and `--timelapse-hardware gpu`; they are not silently rewritten to Auto or CPU.
 
-After a successful **Group** or **Full run**, the workspace restores the original Process input and maps `manifest.json` / `group_*` engine output back onto those original source frames. It no longer treats `output/groups` as the working source by accident.
+Grouping is intentionally a hybrid pipeline on the standard packaged OpenCV stack: CUDA/CuPy accelerates descriptor matching, while image decode, ORB feature extraction, and RANSAC homography can still use the CPU. Seeing some CPU activity during GPU grouping is therefore expected. If an explicit GPU backend is unavailable, the job should stop with a diagnostic instead of pretending GPU acceleration succeeded.
 
-Clicking a group opens its frames immediately and selects the first visible frame. Manual review includes:
+## Photo Workspace — visual review, groups and frame inclusion
 
-- Ctrl/Cmd and Shift multi-select
-- drag selected frames as a block inside the current group
-- drag one or many selected frames onto another group
-- Previous / Next frame navigation
-- remove selected frames from a group without deleting files
-- frame-thumbnail and group-thumbnail visibility toggles
+After **Group** or **Full run**, engine groups are mapped back to the original source photos and imported into the workspace atomically. The group strip is not rebuilt visibly one group at a time, which avoids the scrollbar/layout jumping that is especially distracting on large projects.
+
+![Photo Workspace showing frames, manual review and groups](./docs/screenshots/v0.3.13-workspace-groups.png)
+
+Manual review supports:
+
+- Ctrl/Cmd multi-select and Shift range-select
+- Select all / Clear selection / Invert selection
+- drag selected frames as a block
+- move selected frames between groups
 - create, rename, reorder, split, merge and delete groups
+- mass-delete group records without deleting source photos
 - group Undo / Redo
-- filename/date sorting followed by continued manual drag ordering
+- Previous / Next frame navigation
+- filename/date sorting followed by manual ordering
+- frame and group thumbnail visibility controls
 - manual **Sync engine groups** when an explicit refresh is useful
 
-### Large projects
+### Active group and `Include all`
 
-Thumbnail work is viewport-aware and uses a decoded-size-aware LRU cache capped at **128 thumbnails / 40 MB**. Off-screen references are released, object URLs are revoked when appropriate, source-image decoding is serialized to reduce transient memory spikes, and the workspace can reduce/pause preview work for large projects. The Performance Mode indicator makes those safeguards visible.
+Clicking **All frames** or a group makes that scope the active Frames view. Opening a scope includes all frames in that scope by default.
+
+`Include all` belongs to the **currently visible Frames scope**, not the whole project:
+
+- checked → every visible frame is included
+- mixed/indeterminate → only some visible frames are included
+- unchecked → the visible scope is excluded
+- switching to another group gives that group's own visible inclusion state
+- clicking **All frames** returns to the project-wide frame view
+
+The active group used for viewing remains separate from multi-selected groups used for group operations.
+
+### Large projects and thumbnails
+
+The workspace avoids using full-resolution source images as list thumbnails. Native thumbnail generation/cache is reused by frame cards and group mini-previews, while viewport-aware loading limits unnecessary decode work. Off-screen previews are released and parallel decode work is bounded so hundreds or thousands of frames do not intentionally block the UI thread.
 
 ## Non-destructive Photo Editor
 
-![v0.3.5 Photo Editor](./docs/screenshots/v0.3.5-editor.png)
+The editor uses the same native decoded preview path as the workspace instead of asking the WebView to decode the original full-resolution local file again. This keeps JPEG/RAW preview behavior consistent with the thumbnail pipeline.
 
-Per-frame edit state includes exposure, brightness, contrast, highlights, shadows, saturation, warmth, sharpness, rotation, crop aspect and JPEG export quality. The editor provides **Before**, **Undo**, **Redo**, **Reset**, Copy/Paste settings, and scoped application to selected frames, the current group or all frames. Edited JPEG export is available for the current frame, selection or current group. Originals remain untouched.
+![Photo Editor with preview and non-destructive controls](./docs/screenshots/v0.3.13-photo-editor.png)
+
+Per-frame edit state includes exposure, brightness, contrast, highlights, shadows, saturation, warmth, sharpness, rotation, crop aspect and JPEG export quality. The editor provides **Before**, **Undo**, **Redo**, **Reset**, Copy/Paste settings, and scoped application to selected frames, the current group or all frames.
+
+Edited JPEG export is available for the current frame, selection or current group. Originals remain untouched.
 
 ## Parameter Guide
 
-![v0.3.5 Parameter Guide](./docs/screenshots/v0.3.5-parameter-guide.png)
+Inline `i` help and the Parameter Guide explain grouping strictness, capture-time constraints, output controls, hardware policies, thumbnail behavior and editor parameters without requiring users to know the CLI flags first.
 
-Inline `i` help and the Parameter Guide explain grouping strictness, capture-time constraints, image/video output controls, hardware policies, thumbnail behavior and editor parameters without requiring users to know the CLI flags first.
+![Parameter Guide with explanations for processing controls](./docs/screenshots/v0.3.13-parameter-guide.png)
 
 ## Processing workspaces
 
 The application has four top-level workspaces:
 
-1. **Process** — Full run / Group / Trail / Timelapse quick workflows, native pickers, readiness reasons, advanced CLI parameters, streaming logs and cancellation.
-2. **Photo Workspace** — frame selection, ordering, engine-group sync, group editing, memory-bounded previews and non-destructive image edits.
-3. **Full Desktop** — launches the installed upstream `tihulu desktop`, preserving the original native feature set including Manual Review, RAW previews, hardware acceleration and export controls.
-4. **Web Forge** — launches the engine-backed local `tihulu ui` and exposes the hosted Star Trail Forge workflow.
+1. **Process** — Full run / Group / Trail / Timelapse, native pickers, readiness reasons, hardware policies, advanced CLI parameters, streaming logs and cancellation.
+2. **Photo Workspace** — visual frame review, inclusion, ordering, engine-group sync, group editing, cached previews and non-destructive image edits.
+3. **Full Desktop** — launches the installed upstream `tihulu desktop`, preserving the original native feature set.
+4. **Web Forge** — launches the engine-backed local `tihulu ui` workflow.
 
 ## Engine compatibility and one-line install
 
@@ -81,7 +113,7 @@ Windows PowerShell:
 irm https://raw.githubusercontent.com/Tihulu/GUI4tihulu-star-trail/main/scripts/install.ps1 | iex
 ```
 
-The installers verify that the detected engine exposes the current `--group-hardware`, `--trail-hardware` and `--timelapse-hardware` policies. If an installed `tihulu-star-trail` is too old, the installer upgrades it to the current engine and verifies those controls again. The GUI also provides an **Update engine** recovery path when an incompatible engine is detected.
+The installers verify the engine capabilities needed by the current GUI, including Group / Trail / Timelapse hardware policies. Linux AppImage launches the external managed Python engine through a sanitized environment so AppImage-specific Python/library paths do not leak into the engine runtime.
 
 ## Platforms
 
@@ -95,7 +127,9 @@ Linux ARM64 GUI publishing is intentionally deferred until the upstream engine h
 
 ## Release validation
 
-v0.3.5 was validated with the packaged Linux x86_64 AppImage using a real six-frame Group → Photo Workspace → Photo Editor workflow, including original-source group mapping, 3+3 group counts and frame-to-frame editor preview sync. The cross-platform desktop workflow must also pass on **Windows x86_64, Linux x86_64 and macOS Universal** before merge; the versioned release is produced only after all three main-branch builds succeed.
+Before release, the project requires TypeScript/Rust regression coverage plus Linux, Windows and macOS package builds. Linux additionally runs the **real packaged AppImage** under the acceptance harness.
+
+The packaged acceptance path covers native thumbnail IPC, Photo Editor canvas rendering, atomic multi-group workspace import, visible-group inclusion behavior, exact GPU job flags and Effective backend reporting. A versioned release is not considered ready while that acceptance path is red.
 
 ## License
 

@@ -14,10 +14,6 @@ function activeMode(): Mode {
   return value === "group" || value === "trail" || value === "timelapse" ? value : "run";
 }
 
-function hasActiveGroup(): boolean {
-  return Boolean(qs<HTMLElement>(".studio-group-card.active[data-group-id]"));
-}
-
 function activateQuickMode(mode: QuickMode): void {
   const useSelection = qs<HTMLInputElement>("#useWorkspaceSelection");
   if (useSelection && !useSelection.disabled) {
@@ -97,21 +93,6 @@ function installWorkspaceQuickActions(): void {
   timelapse.addEventListener("click", () => activateQuickMode("timelapse"));
 }
 
-function forceAllFramesExcluded(): void {
-  if (!hasActiveGroup()) return;
-  const allIncluded = qs<HTMLInputElement>("#allIncluded");
-  if (!allIncluded) return;
-  allIncluded.checked = true;
-  allIncluded.click();
-}
-
-function installExactGroupSelectionGuard(): void {
-  const processButton = qs<HTMLButtonElement>("#studioUseGroup");
-  if (!processButton || processButton.dataset.exactGroupGuardReady === "1") return;
-  processButton.dataset.exactGroupGuardReady = "1";
-  processButton.addEventListener("click", forceAllFramesExcluded, { capture: true });
-}
-
 function linkModeDescription(mode: LinkMode): string {
   if (mode === "copy") return "Portable and safest: creates independent copies and uses extra disk space.";
   if (mode === "symlink") return navigator.userAgent.includes("Windows")
@@ -189,7 +170,6 @@ function install(): boolean {
   installOutputNames();
   installWorkspaceQuickActions();
   installLinkModeHelp();
-  installExactGroupSelectionGuard();
   installModeRequestGuard();
   return Boolean(qs("#trailOutputName") && qs("#timelapseOutputName") && qs("#workspaceTrail") && qs("#studioUseGroup"));
 }

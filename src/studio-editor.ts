@@ -240,6 +240,16 @@ function setupStudioEditor(
   function groupForPath(path: string): GroupRecord | null { const id = assignments.get(path) ?? null; return id ? groups.find((group) => group.id === id) ?? null : null; }
   function activeGroup(): GroupRecord | null { return activeGroupId ? groups.find((group) => group.id === activeGroupId) ?? null : null; }
   function groupPaths(groupId: string): string[] { return allPaths().filter((path) => assignments.get(path) === groupId); }
+  function publishWorkspaceScope(includeAll = false, excludeOutside = false): void {
+    const paths = activeGroupId ? groupPaths(activeGroupId) : allPaths();
+    window.dispatchEvent(new CustomEvent("tihulu:workspace-visible-scope", { detail: { paths, includeAll, excludeOutside } }));
+  }
+  function activateGroupView(groupId: string | null): void {
+    activeGroupId = groupId;
+    renderGroups();
+    applyGroupFilter();
+    publishWorkspaceScope(true);
+  }
   function snapshotGroups(): GroupSnapshot { return { groups: groups.map((group) => ({ ...group })), assignments: [...assignments], activeGroupId }; }
 
   function restoreGroupSnapshot(snapshot: GroupSnapshot): void {
@@ -272,7 +282,7 @@ function setupStudioEditor(
     const allCard = document.createElement("button");
     allCard.type = "button"; allCard.className = `studio-group-card all-card${activeGroupId === null ? " active" : ""}`;
     allCard.innerHTML = `<span class="group-card-main"><strong>All frames</strong><small>${allPaths().length} photos · ${ungroupedCount} ungrouped</small></span>`;
-    allCard.addEventListener("click", () => { activeGroupId = null; renderGroups(); applyGroupFilter(); });
+    allCard.addEventListener("click", () => activateGroupView(null));
     groupList.append(allCard);
 
     const selectGroup = (groupId: string, event: MouseEvent) => {
@@ -300,7 +310,7 @@ function setupStudioEditor(
       card.querySelector<HTMLButtonElement>(".group-select-toggle")?.addEventListener("click", (event) => { event.stopPropagation(); selectGroup(group.id, event); });
       card.querySelector<HTMLButtonElement>(".group-open")?.addEventListener("click", (event) => {
         if (event.ctrlKey || event.metaKey || event.shiftKey) { selectGroup(group.id, event); return; }
-        activeGroupId = group.id; renderGroups(); applyGroupFilter();
+        activateGroupView(group.id);
       });
       card.addEventListener("dragstart", (event) => { draggedGroupId = group.id; event.dataTransfer?.setData("application/x-tihulu-group", group.id); });
       card.addEventListener("dragend", () => { draggedGroupId = null; card.classList.remove("group-drag-over"); });
@@ -387,6 +397,8 @@ function setupStudioEditor(
     const canvas = document.createElement("canvas"); canvas.width = outW; canvas.height = outH; const ctx = canvas.getContext("2d", { willReadFrequently: true }); if (!ctx) { image.close(); throw new Error("Canvas renderer unavailable"); }
     try { ctx.save(); ctx.translate(outW / 2, outH / 2); ctx.rotate(radians); ctx.drawImage(image.source, cropRect.x, cropRect.y, cropRect.w, cropRect.h, -baseW / 2, -baseH / 2, baseW, baseH); ctx.restore(); }
     finally { image.close(); }
+    const hasPixelEdits = edit.exposure !== 0 || edit.brightness !== 0 || edit.contrast !== 0 || edit.highlights !== 0 || edit.shadows !== 0 || edit.saturation !== 0 || edit.warmth !== 0 || edit.sharpness !== 0;
+    if (!hasPixelEdits) return { canvas, pixelEdited: true };
     try { const frame = ctx.getImageData(0, 0, outW, outH); applyPixelEdits(frame.data, outW, outH, edit); ctx.putImageData(frame, 0, 0); return { canvas, pixelEdited: true }; } catch (error) { console.warn("Studio Editor pixel renderer unavailable; using limited CSS fallback", error); canvas.style.filter = cssFallbackFilter(edit); return { canvas, pixelEdited: false }; }
   }
   function centeredCrop(width: number, height: number, crop: EditState["crop"]): { x: number; y: number; w: number; h: number } { if (crop === "original") return { x: 0, y: 0, w: width, h: height }; const [a, b] = crop.split(":").map(Number); const target = a / b; const current = width / height; if (current > target) { const w = height * target; return { x: (width - w) / 2, y: 0, w, h: height }; } const h = width / target; return { x: 0, y: (height - h) / 2, w: width, h }; }
@@ -427,16 +439,21 @@ function setupStudioEditor(
   function toast(message: string): void { let node = document.querySelector<HTMLDivElement>("#studioToast"); if (!node) { node = document.createElement("div"); node.id = "studioToast"; node.className = "studio-toast"; document.body.append(node); } node.textContent = message; node.classList.add("show"); window.setTimeout(() => node?.classList.remove("show"), 2400); }
 
   async function useCurrentGroupForProcess(): Promise<void> {
-    const group = activeGroup(); if (!group) { toast("Choose a group first."); return; } const wanted = new Set(groupPaths(group.id)); const allIncluded = document.querySelector<HTMLInputElement>("#allIncluded"); if (allIncluded?.checked) { allIncluded.click(); await nextFrame(); }
-    for (const path of wanted) { const tile = tiles().find((item) => item.dataset.path === path); const checkbox = tile?.querySelector<HTMLInputElement>(".include-box input"); if (checkbox && !checkbox.checked) { checkbox.click(); await nextFrame(); } }
-    const useSelection = document.querySelector<HTMLInputElement>("#useWorkspaceSelection"); if (useSelection) useSelection.checked = true; document.querySelector<HTMLButtonElement>("#goToProcess")?.click(); toast(`${group.name} is now the processing selection.`);
+    const group = activeGroup();
+    if (!group) { toast("Choose a group first."); return; }
+    publishWorkspaceScope(false, true);
+    await nextFrame();
+    const useSelection = document.querySelector<HTMLInputElement>("#useWorkspaceSelection");
+    if (useSelection) useSelection.checked = true;
+    document.querySelector<HTMLButtonElement>("#goToProcess")?.click();
+    toast(`${group.name} is now the processing selection.`);
   }
   function nextFrame(): Promise<void> { return new Promise((resolve) => requestAnimationFrame(() => resolve())); }
 
   let convertingSortToManual = false;
   orderSelect.addEventListener("change", () => { if (convertingSortToManual || orderSelect.value === "manual") return; const applied = orderSelect.options[orderSelect.selectedIndex]?.textContent || "sorted order"; window.setTimeout(() => { convertingSortToManual = true; orderSelect.value = "manual"; orderSelect.dispatchEvent(new Event("change", { bubbles: true })); convertingSortToManual = false; toast(`${applied} applied. Manual drag is still enabled.`); }, 0); });
 
-  commandBar.querySelector<HTMLButtonElement>("#studioShowAll")!.addEventListener("click", () => { activeGroupId = null; renderGroups(); applyGroupFilter(); });
+  commandBar.querySelector<HTMLButtonElement>("#studioShowAll")!.addEventListener("click", () => activateGroupView(null));
   commandBar.querySelector<HTMLButtonElement>("#studioGroupsFromFolders")!.addEventListener("click", () => autoGroupsFromPaths(false));
   commandBar.querySelector<HTMLButtonElement>("#studioNewGroup")!.addEventListener("click", () => { const paths = selectedPaths(); if (!paths.length) { toast("Select one or more photos first."); return; } const name = window.prompt("New group name", uniqueGroupName(`Group ${groups.length + 1}`)); if (!name?.trim()) return; recordGroupMutation(); const group = { id: crypto.randomUUID(), name: uniqueGroupName(name.trim()) }; groups.push(group); paths.forEach((path) => assignments.set(path, group.id)); activeGroupId = group.id; renderGroups(); applyGroupFilter(); scheduleSave(); });
   moveTarget.addEventListener("change", () => { const value = moveTarget.value; if (!value) return; const paths = selectedPaths(); if (!paths.length) { toast("Select photos to move first."); moveTarget.value = ""; return; } movePathsToGroup(paths, value === "__ungrouped__" ? null : value); moveTarget.value = ""; });
@@ -482,6 +499,8 @@ function setupStudioEditor(
       renderEditorForSelection();
     });
   }
+  window.addEventListener("tihulu:workspace-grid-rendered", () => queueStructureSync());
+
   const observer = new MutationObserver((mutations) => {
     const structureChanged = mutations.some((mutation) => mutation.type === "childList");
     if (structureChanged) queueStructureSync();
