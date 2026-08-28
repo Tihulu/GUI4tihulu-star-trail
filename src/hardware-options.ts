@@ -97,7 +97,10 @@ function installBackendObserver(): void {
     }
     processed = rows.length;
   };
-  new MutationObserver(consume).observe(consoleBody, { childList: true, subtree: true, characterData: true });
+  new MutationObserver((mutations) => {
+    if (mutations.some((mutation) => mutation.type === "childList" && mutation.removedNodes.length > 0)) processed = 0;
+    consume();
+  }).observe(consoleBody, { childList: true, subtree: true, characterData: true });
   consume();
 }
 
