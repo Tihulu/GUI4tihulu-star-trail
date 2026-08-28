@@ -22,7 +22,10 @@ async function bootFeatures(): Promise<void> {
   // from starting in a packaged Tauri build.
   await loadFeature("Branding", () => import("./branding"));
   await loadFeature("RenderOptions", () => import("./render-options"));
-  await loadFeature("HardwareOptions", () => import("./hardware-options"));
+  await loadFeature("HardwareOptions", async () => {
+    const module = await import("./hardware-options");
+    await module.hardwareOptionsReady;
+  });
   await loadFeature("EngineCompat", () => import("./engine-compat"));
   await loadFeature("ParameterInfo", () => import("./parameter-info"));
   await loadFeature("PhotoThumbnailManager", () => import("./photo-thumbnail-manager"));
