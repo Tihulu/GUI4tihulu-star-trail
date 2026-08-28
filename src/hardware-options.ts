@@ -21,6 +21,7 @@ const INFO: Record<HardwareKind, { title: string; body: string }> = {
 };
 
 let previousJobLogLine = "";
+let backendListenerReady: Promise<void> | null = null;
 
 function qs<T extends Element>(selector: string): T | null { return document.querySelector<T>(selector); }
 
@@ -93,14 +94,23 @@ function consumeBackendLine(line: string): void {
   previousJobLogLine = normalized;
 }
 
-function installBackendListener(): void {
+function installBackendListener(): Promise<void> {
   const root = document.documentElement;
-  if (root.dataset.hardwareBackendListening === "true") return;
-  root.dataset.hardwareBackendListening = "true";
-  void listen<LogPayload>("job-log", (event) => consumeBackendLine(event.payload.line)).catch((error) => {
-    root.dataset.hardwareBackendListening = "failed";
-    console.warn("Hardware backend listener unavailable", error);
-  });
+  if (root.dataset.hardwareBackendListening === "true") return Promise.resolve();
+  if (backendListenerReady) return backendListenerReady;
+
+  root.dataset.hardwareBackendListening = "registering";
+  backendListenerReady = listen<LogPayload>("job-log", (event) => consumeBackendLine(event.payload.line))
+    .then(() => {
+      root.dataset.hardwareBackendListening = "true";
+    })
+    .catch((error) => {
+      backendListenerReady = null;
+      root.dataset.hardwareBackendListening = "failed";
+      console.warn("Hardware backend listener unavailable", error);
+      throw error;
+    });
+  return backendListenerReady;
 }
 
 function wireSegment(id: string): void {
@@ -129,12 +139,12 @@ function showInfo(kind: HardwareKind): void {
   node.classList.add("show");
 }
 
-function install(): boolean {
+function installUi(): boolean {
   const grouping = qs<HTMLElement>('.settings-section[data-show="run,group"]');
   const trailCard = qs<HTMLElement>("#trailOptionsCard");
   const timelapseCard = qs<HTMLElement>("#timelapseOptionsCard");
   if (!grouping || !trailCard || !timelapseCard) return false;
-  if (qs("#groupHardwarePolicy")) { installBackendListener(); return true; }
+  if (qs("#groupHardwarePolicy")) return true;
 
   const groupWrap = document.createElement("div");
   groupWrap.className = "hardware-policy-wrap";
@@ -154,18 +164,29 @@ function install(): boolean {
   ["groupHardwarePolicy", "trailHardwarePolicy", "timelapseHardwarePolicy"].forEach(wireSegment);
   document.querySelectorAll<HTMLButtonElement>("[data-hardware-info]").forEach((button) => button.addEventListener("click", () => showInfo(button.dataset.hardwareInfo as HardwareKind)));
   qs<HTMLButtonElement>("#startJob")?.addEventListener("click", resetEffectiveForActiveJob, true);
-  installBackendListener();
   return true;
 }
 
-function start(): void {
-  if (install()) return;
-  let attempts = 0;
-  const timer = window.setInterval(() => {
-    attempts += 1;
-    if (install() || attempts >= 120) window.clearInterval(timer);
-  }, 50);
+async function waitForUi(): Promise<void> {
+  if (installUi()) return;
+  await new Promise<void>((resolve, reject) => {
+    let attempts = 0;
+    const timer = window.setInterval(() => {
+      attempts += 1;
+      if (installUi()) {
+        window.clearInterval(timer);
+        resolve();
+      } else if (attempts >= 120) {
+        window.clearInterval(timer);
+        reject(new Error("Hardware controls did not become available"));
+      }
+    }, 50);
+  });
 }
 
-if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", start, { once: true });
-else start();
+async function start(): Promise<void> {
+  await waitForUi();
+  await installBackendListener();
+}
+
+export const hardwareOptionsReady = start();
