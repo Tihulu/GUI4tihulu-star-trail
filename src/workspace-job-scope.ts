@@ -31,3 +31,5 @@ function scopeJobToVisibleGroup(event: MouseEvent): void {
 }
 
 document.addEventListener("click", scopeJobToVisibleGroup, { capture: true });
+
+export {};
