@@ -18,6 +18,13 @@ function scopeJobToVisibleGroup(event: MouseEvent): void {
     .filter((path): path is string => Boolean(path));
 
   if (paths.length === 0) return;
+
+  // An active Studio group is an explicit processing scope. Never allow a
+  // previously disabled Use selection toggle to turn that scoped job back into
+  // a recursive scan of the whole source folder/SD card.
+  const useSelection = document.querySelector<HTMLInputElement>("#useWorkspaceSelection");
+  if (useSelection) useSelection.checked = true;
+
   window.dispatchEvent(new CustomEvent("tihulu:workspace-visible-scope", {
     detail: { paths, includeAll: false, excludeOutside: true },
   }));
