@@ -5,4 +5,5 @@ globalThis.setTimeout = (handler, delay, ...args) => {
   return nativeSetTimeout(handler, effectiveDelay, ...args);
 };
 
+await import("./packaged-active-group-scope.mjs");
 await import("./packaged-appimage.mjs");
