@@ -101,6 +101,10 @@ try {
                   const visibleTile = Array.from(document.querySelectorAll("#photoGrid .photo-tile[data-path]"))
                     .find((tile) => expectedSources.includes(tile.dataset.path) && !tile.classList.contains("studio-group-hidden"));
                   visibleTile?.querySelector(".include-box input")?.click();
+
+                  const useSelection = document.querySelector("#useWorkspaceSelection");
+                  if (useSelection) useSelection.checked = false;
+
                   const start = document.querySelector("#startJob");
                   if (!start) {
                     done({ ok: false, error: "Start button is unavailable" });
@@ -112,14 +116,17 @@ try {
                   const state = tileState().filter((item) => expectedSources.includes(item.path));
                   const visible = state.filter((item) => !item.hidden);
                   const outside = state.filter((item) => item.hidden);
+                  const selectionForced = Boolean(document.querySelector("#useWorkspaceSelection")?.checked);
                   done({
                     ok: visible.length === 2
                       && outside.length === 2
                       && outside.every((item) => item.included === false)
-                      && visible.filter((item) => item.included).length === 1,
+                      && visible.filter((item) => item.included).length === 1
+                      && selectionForced,
                     state,
                     visibleIncluded: visible.filter((item) => item.included).length,
                     outsideIncluded: outside.filter((item) => item.included).length,
+                    selectionForced,
                   });
                 },
                 () => done({ ok: false, error: "First group did not become the visible scope", state: tileState() }),
@@ -142,6 +149,7 @@ try {
   );
   assert.equal(result.visibleIncluded, 1, "manual exclusion inside active group was not preserved");
   assert.equal(result.outsideIncluded, 0, "frames outside active group remained included at Start");
+  assert.equal(result.selectionForced, true, "active group allowed Use selection to stay disabled");
   stage("active-group Start scope passed");
 } finally {
   if (driver) {
