@@ -12,6 +12,7 @@ test("Linux installer shows one Studio entry while preserving its app-id aliases
   assert.ok(install.includes("printf 'NoDisplay=true\\n' >> \"$DESKTOP_FILE\""));
 });
 
-test("Studio install never removes the separately installed legacy Tihulu Star Trail launcher", () => {
+test("Studio install leaves a separately installed legacy Tihulu Star Trail app visible", () => {
   assert.ok(!install.includes('rm -f "$HOME/.local/share/applications/tihulu-star-trail.desktop"'));
+  assert.ok(install.includes('rm -f "$HOME/.local/share/applications/tihulu-star-trail-studio.desktop"'));
 });
