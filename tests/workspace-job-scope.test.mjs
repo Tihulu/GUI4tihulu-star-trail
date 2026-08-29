@@ -14,6 +14,12 @@ test("active Studio group is authoritative when a job starts", () => {
   assert.match(guard, /detail: \{ paths, includeAll: false, excludeOutside: true \}/);
 });
 
+test("active-group staging preserves manual exclusions inside the group", () => {
+  assert.match(guard, /includeAll: false/);
+  assert.match(guard, /excludeOutside: true/);
+  assert.doesNotMatch(guard, /includeAll: true/);
+});
+
 test("all-frames view is not narrowed by the guard", () => {
   assert.match(guard, /!tiles\.some\(\(tile\) => tile\.classList\.contains\("studio-group-hidden"\)\)/);
 });
