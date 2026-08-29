@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, writeFileSync } from "node:fs";
+import { existsSync, unlinkSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { spawn } from "node:child_process";
 import { Builder, By, Capabilities, until } from "selenium-webdriver";
@@ -147,12 +147,14 @@ try {
   if (driver) {
     try { await driver.quit(); } catch {}
   }
-  if (tauriDriver && !tauriDriver.killed) {
+  if (tauriDriver && tauriDriver.exitCode === null) {
     tauriDriver.kill("SIGTERM");
     await Promise.race([
       new Promise((resolveExit) => tauriDriver.once("exit", resolveExit)),
       sleep(2500),
     ]);
-    if (tauriDriver.exitCode === null && !tauriDriver.killed) tauriDriver.kill("SIGKILL");
+  }
+  for (const source of sources) {
+    try { if (existsSync(source)) unlinkSync(source); } catch {}
   }
 }
