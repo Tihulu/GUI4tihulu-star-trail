@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 
 const bootstrap = readFileSync(new URL("../src/bootstrap.ts", import.meta.url), "utf8");
 const guard = readFileSync(new URL("../src/workspace-job-scope.ts", import.meta.url), "utf8");
+const packagedEntry = readFileSync(new URL("./packaged-appimage-entry.mjs", import.meta.url), "utf8");
 
 test("active Studio group is authoritative when a job starts", () => {
   assert.match(bootstrap, /WorkspaceJobScope/);
@@ -22,4 +23,9 @@ test("active-group staging preserves manual exclusions inside the group", () => 
 
 test("all-frames view is not narrowed by the guard", () => {
   assert.match(guard, /!tiles\.some\(\(tile\) => tile\.classList\.contains\("studio-group-hidden"\)\)/);
+});
+
+test("real packaged AppImage acceptance runs the active-group Start probe", () => {
+  assert.match(packagedEntry, /packaged-active-group-scope\.mjs/);
+  assert.match(packagedEntry, /packaged-appimage\.mjs/);
 });
