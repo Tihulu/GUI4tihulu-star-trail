@@ -6,6 +6,7 @@ import test from "node:test";
 const main = readFileSync(new URL("../src/main.ts", import.meta.url), "utf8");
 const editor = readFileSync(new URL("../src/studio-editor.ts", import.meta.url), "utf8");
 const polish = readFileSync(new URL("../src/workflow-polish.ts", import.meta.url), "utf8");
+const jobScope = readFileSync(new URL("../src/workspace-job-scope.ts", import.meta.url), "utf8");
 
 // Visible scope must survive every photo-grid DOM rebuild; otherwise group switching races the filter guard.
 test("Include all is scoped to the visible Studio group", () => {
@@ -33,4 +34,10 @@ test("opening a group or All frames includes the visible scope by default", () =
 test("Use current group excludes outside frames without re-including manual exclusions inside it", () => {
   assert.match(editor, /publishWorkspaceScope\(false, true\)/);
   assert.doesNotMatch(editor, /for \(const path of wanted\)/);
+});
+
+test("starting a job from an active group cannot stage globally included outside frames", () => {
+  assert.match(jobScope, /#startJob/);
+  assert.match(jobScope, /studio-group-hidden/);
+  assert.match(jobScope, /includeAll: false, excludeOutside: true/);
 });

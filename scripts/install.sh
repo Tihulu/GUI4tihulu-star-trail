@@ -294,9 +294,10 @@ exec "$APPIMAGE" "\$@"
 EOF
     chmod +x "$LAUNCHER"
 
-    # COSMIC showed the live Wry/GTK identity as "Gui4tihulu-star-trail" while
-    # other desktops may normalize it to lowercase. Desktop-file lookup on
-    # Wayland is case-sensitive, so install exact aliases for both identities.
+    # COSMIC exposes the live Wry/GTK identity as "Gui4tihulu-star-trail".
+    # Keep the lowercase Wayland alias for case-sensitive desktop-file lookup,
+    # but hide that compatibility alias from application menus so COSMIC shows
+    # exactly one Studio launcher after install or upgrade.
     rm -f "$HOME/.local/share/applications/tihulu-star-trail-studio.desktop"
     rm -f "$HOME/.local/share/applications/$TAURI_IDENTIFIER.desktop"
     for APP_ID in "$WAYLAND_APP_ID" "$COSMIC_APP_ID"; do
@@ -314,6 +315,9 @@ Terminal=false
 Categories=Graphics;Photography;
 StartupNotify=true
 EOF
+      if [ "$APP_ID" = "$WAYLAND_APP_ID" ]; then
+        printf 'NoDisplay=true\n' >> "$DESKTOP_FILE"
+      fi
     done
     command -v gtk-update-icon-cache >/dev/null 2>&1 && gtk-update-icon-cache -f -t "$HOME/.local/share/icons/hicolor" >/dev/null 2>&1 || true
     command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "$HOME/.local/share/applications" >/dev/null 2>&1 || true
