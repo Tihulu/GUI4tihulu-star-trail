@@ -12,6 +12,8 @@ test("active Studio group is authoritative when a job starts", () => {
   assert.match(guard, /closest\("#startJob"\)/);
   assert.match(guard, /studio-group-hidden/);
   assert.match(guard, /filter\(\(tile\) => !tile\.classList\.contains\("studio-group-hidden"\)\)/);
+  assert.match(guard, /#useWorkspaceSelection/);
+  assert.match(guard, /useSelection\.checked = true/);
   assert.match(guard, /detail: \{ paths, includeAll: false, excludeOutside: true \}/);
 });
 
